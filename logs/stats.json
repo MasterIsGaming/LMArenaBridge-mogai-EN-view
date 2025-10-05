@@ -1,5 +1,5 @@
 {
-  "last_update": 1759673455.422112,
+  "last_update": 1759674173.217034,
   "startup_time": 1759665004.6219366,
   "model_stats": {
     "seedream-4-1k-battle-6": {
@@ -108,11 +108,11 @@
       "count_with_duration": 7
     },
     "gemini-2.5-pro": {
-      "total": 11,
-      "success": 11,
+      "total": 16,
+      "success": 16,
       "failed": 0,
-      "total_duration": 440.43514943122864,
-      "count_with_duration": 11
+      "total_duration": 537.6263158321381,
+      "count_with_duration": 16
     },
     "gpt-5-chat": {
       "total": 3,
@@ -129,7 +129,7 @@
       "count_with_duration": 2
     }
   },
-  "total_requests_all_time": 123,
-  "total_success_all_time": 111,
+  "total_requests_all_time": 128,
+  "total_success_all_time": 116,
   "total_failed_all_time": 12
 }
