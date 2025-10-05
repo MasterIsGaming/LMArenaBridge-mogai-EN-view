@@ -60,6 +60,8 @@ CONFIG = {} # 存储从 config.jsonc 加载的配置
 # 键是标签页ID（tab_id），值是 WebSocket 对象
 browser_connections: dict[str, WebSocket] = {}
 browser_connections_lock = asyncio.Lock()  # 保护并发访问
+# 新增：跟踪标签页连接时间
+tab_connection_times: dict[str, float] = {}
 # 兼容性：保留browser_ws用于向后兼容（指向第一个连接）
 browser_ws: WebSocket | None = None
 # response_channels 用于存储每个 API 请求的响应队列。
@@ -2192,6 +2194,8 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.warning(f"[WS_CONN] 标签页 {tab_id} 已存在连接，将被新连接替换")
         
         browser_connections[tab_id] = websocket
+        # 记录连接时间
+        tab_connection_times[tab_id] = time.time()
         
         # 兼容性：将第一个连接设置为browser_ws
         if not browser_ws or tab_id == "default":
@@ -2226,6 +2230,15 @@ async def websocket_endpoint(websocket: WebSocket):
     await monitoring_service.broadcast_to_monitors({
         "type": "browser_status",
         "connected": True
+    })
+    
+    # 广播标签页状态更新
+    await monitoring_service.broadcast_to_monitors({
+        "type": "tab_connection",
+        "action": "connected",
+        "tab_id": tab_id,
+        "total_tabs": len(browser_connections),
+        "total_capacity": len(browser_connections) * 6
     })
     
     # --- 增强：处理所有待恢复的请求（包括pending_requests_queue和response_channels）---
@@ -2354,6 +2367,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 del browser_connections[tab_id]
                 logger.info(f"[WS_CONN] 标签页 '{tab_id}' 已移除")
             
+            # 移除连接时间记录
+            if tab_id in tab_connection_times:
+                del tab_connection_times[tab_id]
+            
             # 更新browser_ws（向后兼容）
             if browser_connections:
                 # 如果还有其他连接，使用第一个
@@ -2372,7 +2389,16 @@ async def websocket_endpoint(websocket: WebSocket):
         # 广播浏览器断开状态到监控面板
         await monitoring_service.broadcast_to_monitors({
             "type": "browser_status",
-            "connected": False
+            "connected": len(browser_connections) > 0
+        })
+        
+        # 广播标签页状态更新
+        await monitoring_service.broadcast_to_monitors({
+            "type": "tab_connection",
+            "action": "disconnected",
+            "tab_id": tab_id,
+            "total_tabs": len(browser_connections),
+            "total_capacity": len(browser_connections) * 6
         })
         
         # 如果禁用了自动重试，则像以前一样清理通道
@@ -3205,6 +3231,39 @@ async def get_performance_metrics():
         }
     }
     return metrics
+
+@app.get("/api/monitor/tabs")
+async def get_tab_connections():
+    """获取标签页连接状态"""
+    async with browser_connections_lock:
+        tabs_info = []
+        current_time = time.time()
+        
+        for tab_id, ws in browser_connections.items():
+            # 计算该标签页的连接时长
+            connection_start = tab_connection_times.get(tab_id, current_time)
+            connected_duration = current_time - connection_start
+            
+            # 获取该标签页的请求负载
+            load = tab_request_counts.get(tab_id, 0)
+            
+            tabs_info.append({
+                "tab_id": tab_id,
+                "connected": ws.client_state.name == 'CONNECTED' if ws else False,
+                "active_requests": load,
+                "max_concurrent": 6,  # 浏览器HTTP/1.1限制
+                "load_percentage": (load / 6) * 100 if load < 6 else 100,
+                "status": "busy" if load >= 6 else "available",
+                "connected_duration": connected_duration,
+                "connected_at": connection_start
+            })
+        
+        return {
+            "total_tabs": len(browser_connections),
+            "total_capacity": len(browser_connections) * 6,
+            "total_active_requests": sum(tab_request_counts.values()),
+            "tabs": tabs_info
+        }
 
 
 

@@ -1108,6 +1108,38 @@
             </div>
         </div>
         
+        <!-- 标签页连接状态 -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">📋 标签页连接状态</h2>
+                <button class="refresh-btn" onclick="refreshTabConnections()">刷新</button>
+            </div>
+            <div id="tab-connections-container">
+                <div style="padding: 20px;">
+                    <div id="tab-summary" style="display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap;">
+                        <div style="flex: 1; min-width: 200px; padding: 16px; background: #f0fdf4; border-radius: 8px; border: 1px solid #86efac;">
+                            <div style="font-size: 14px; color: #166534; margin-bottom: 4px;">连接标签页</div>
+                            <div style="font-size: 28px; font-weight: 600; color: #15803d;" id="total-tabs">0</div>
+                        </div>
+                        <div style="flex: 1; min-width: 200px; padding: 16px; background: #eff6ff; border-radius: 8px; border: 1px solid #93c5fd;">
+                            <div style="font-size: 14px; color: #1e40af; margin-bottom: 4px;">总并发能力</div>
+                            <div style="font-size: 28px; font-weight: 600; color: #1e3a8a;" id="total-capacity">0</div>
+                            <div style="font-size: 12px; color: #60a5fa; margin-top: 4px;">每个标签页支持6个并发</div>
+                        </div>
+                        <div style="flex: 1; min-width: 200px; padding: 16px; background: #fef3c7; border-radius: 8px; border: 1px solid #fcd34d;">
+                            <div style="font-size: 14px; color: #92400e; margin-bottom: 4px;">当前使用</div>
+                            <div style="font-size: 28px; font-weight: 600; color: #b45309;" id="total-used">0</div>
+                            <div style="font-size: 12px; color: #f59e0b; margin-top: 4px;" id="capacity-usage">使用率: 0%</div>
+                        </div>
+                    </div>
+                    
+                    <div id="tabs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;">
+                        <div class="empty-state">暂无标签页连接</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- 活跃请求 -->
         <div class="section">
             <div class="section-header">
@@ -1299,6 +1331,10 @@
                     break;
                 case 'browser_status':
                     updateBrowserStatus(data.connected);
+                    break;
+                case 'tab_connection':
+                    // 标签页连接状态变化时刷新
+                    refreshTabConnections();
                     break;
             }
         }
@@ -2224,6 +2260,110 @@
                 btn.textContent = '显示日志';
             }
         }
+        
+        // 刷新标签页连接状态
+        async function refreshTabConnections() {
+            try {
+                const response = await fetch('/api/monitor/tabs');
+                const data = await response.json();
+                
+                updateTabConnectionsUI(data);
+            } catch (error) {
+                console.error('获取标签页连接状态失败:', error);
+            }
+        }
+        
+        // 更新标签页连接UI
+        function updateTabConnectionsUI(data) {
+            // 更新汇总信息
+            document.getElementById('total-tabs').textContent = data.total_tabs;
+            document.getElementById('total-capacity').textContent = data.total_capacity + ' 个请求';
+            document.getElementById('total-used').textContent = data.total_active_requests;
+            
+            const usagePercentage = data.total_capacity > 0
+                ? ((data.total_active_requests / data.total_capacity) * 100).toFixed(1)
+                : 0;
+            document.getElementById('capacity-usage').textContent = `使用率: ${usagePercentage}%`;
+            
+            // 更新标签页列表
+            const grid = document.getElementById('tabs-grid');
+            
+            if (!data.tabs || data.tabs.length === 0) {
+                grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">暂无标签页连接</div>';
+                return;
+            }
+            
+            grid.innerHTML = data.tabs.map((tab, index) => {
+                const statusColor = tab.status === 'busy' ? '#dc2626' : '#10b981';
+                const statusText = tab.status === 'busy' ? '繁忙' : '空闲';
+                const statusBg = tab.status === 'busy' ? '#fee2e2' : '#d1fae5';
+                
+                // 生成一个简短的显示ID
+                const shortId = tab.tab_id.split('_').pop().substring(0, 6);
+                
+                // 格式化连接时长
+                const connectedDuration = formatDuration(tab.connected_duration || 0);
+                
+                return `
+                    <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; background: white;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+                            <div style="flex: 1;">
+                                <div style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 4px;">
+                                    标签页 #${index + 1}
+                                </div>
+                                <div style="font-size: 11px; font-family: monospace; color: #6b7280;">
+                                    ID: ${shortId}
+                                </div>
+                                <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">
+                                    已连接: ${connectedDuration}
+                                </div>
+                            </div>
+                            <div style="padding: 4px 12px; background: ${statusBg}; color: ${statusColor}; border-radius: 12px; font-size: 12px; font-weight: 500;">
+                                ${statusText}
+                            </div>
+                        </div>
+                        
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 13px; color: #6b7280; margin-bottom: 4px;">
+                                <span>请求负载</span>
+                                <span style="font-weight: 600; color: #374151;">${tab.active_requests}/${tab.max_concurrent}</span>
+                            </div>
+                            <div style="height: 8px; background: #f3f4f6; border-radius: 4px; overflow: hidden;">
+                                <div style="height: 100%; background: ${tab.load_percentage >= 100 ? '#dc2626' : tab.load_percentage >= 66 ? '#f59e0b' : '#10b981'}; width: ${tab.load_percentage}%; transition: width 0.3s;"></div>
+                            </div>
+                            <div style="font-size: 11px; color: #9ca3af; margin-top: 4px;">
+                                ${tab.load_percentage.toFixed(0)}% 已使用
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 8px; font-size: 12px; margin-bottom: 8px;">
+                            <div style="flex: 1; padding: 8px; background: #f9fafb; border-radius: 4px; text-align: center;">
+                                <div style="color: #6b7280;">活跃请求</div>
+                                <div style="font-weight: 600; color: #374151; margin-top: 2px;">${tab.active_requests}</div>
+                            </div>
+                            <div style="flex: 1; padding: 8px; background: #f9fafb; border-radius: 4px; text-align: center;">
+                                <div style="color: #6b7280;">剩余容量</div>
+                                <div style="font-weight: 600; color: #374151; margin-top: 2px;">${tab.max_concurrent - tab.active_requests}</div>
+                            </div>
+                        </div>
+                        
+                        <div style="padding: 6px 10px; background: ${tab.load_percentage >= 80 ? '#fef3c7' : '#f0fdf4'}; border-radius: 4px; font-size: 11px; color: ${tab.load_percentage >= 80 ? '#92400e' : '#166534'}; text-align: center;">
+                            ${tab.load_percentage >= 80 ? '⚠️ 负载较高' : '✅ 运行良好'}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // 初始化时加载标签页状态
+        setTimeout(() => {
+            refreshTabConnections();
+        }, 1000);
+        
+        // 定期刷新标签页状态（每3秒）
+        setInterval(() => {
+            refreshTabConnections();
+        }, 3000);
         
     </script>
 </body>
