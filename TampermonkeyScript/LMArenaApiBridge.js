@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         LMArena API Bridge test.2
+// @name         LMArena API Bridge test.3
 // @namespace    http://tampermonkey.net/
-// @version      2.6
-// @description  Bridges LMArena to a local API server via WebSocket for streamlined automation. Fixed tab focus issues.
+// @version      2.7
+// @description  Bridges LMArena to a local API server via WebSocket. Supports multi-tab concurrent requests to bypass browser HTTP/1.1 limits.
 // @author       Lianues
 // @match        https://lmarena.ai/*
 // @match        https://*.lmarena.ai/*
@@ -18,45 +18,49 @@
     const SERVER_URL = "ws://localhost:5102/ws"; // 与 api_server.py 中的端口匹配
     let socket;
     let isCaptureModeActive = false; // ID捕获模式的开关
-    
+
+    // --- 生成唯一的标签页ID ---
+    const TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[API Bridge] 本标签页ID: ${TAB_ID}`);
+
     // --- 页面可见性管理 ---
     const visibilityManager = {
         isHidden: document.hidden,
         bufferQueue: [],
         bufferTimer: null,
-        
+
         init() {
             document.addEventListener('visibilitychange', () => {
                 this.isHidden = document.hidden;
                 console.log(`[API Bridge] 页面可见性变化: ${document.visibilityState} (hidden=${this.isHidden})`);
-                
+
                 // 当页面变为可见时，立即发送缓冲的数据
                 if (!this.isHidden && this.bufferQueue.length > 0) {
                     this.flushBuffer();
                 }
             });
         },
-        
+
         flushBuffer() {
             if (this.bufferQueue.length === 0) return;
-            
+
             const combinedData = this.bufferQueue.join('');
             this.bufferQueue = [];
-            
+
             if (this.bufferTimer) {
                 clearTimeout(this.bufferTimer);
                 this.bufferTimer = null;
             }
-            
+
             // 直接发送组合的数据
             return combinedData;
         },
-        
+
         scheduleFlush(requestId, sendFn, delay = 100) {
             if (this.bufferTimer) {
                 clearTimeout(this.bufferTimer);
             }
-            
+
             this.bufferTimer = setTimeout(() => {
                 const data = this.flushBuffer();
                 if (data) {
@@ -77,6 +81,11 @@
 
         socket.onopen = () => {
             console.log("[API Bridge] ✅ 与本地服务器的 WebSocket 连接已建立。");
+            console.log(`[API Bridge] 发送标签页ID: ${TAB_ID}`);
+
+            // 立即发送标签页ID给服务器
+            socket.send(JSON.stringify({ tab_id: TAB_ID }));
+
             document.title = "✅ " + document.title;
         };
 
@@ -108,7 +117,7 @@
                     console.error("[API Bridge] 收到来自服务器的无效消息:", message);
                     return;
                 }
-                
+
                 console.log(`[API Bridge] ⬇️ 收到聊天请求 ${request_id.substring(0, 8)}。准备执行 fetch 操作。`);
                 await executeFetchAndStreamBack(request_id, payload);
 
@@ -134,12 +143,12 @@
     async function executeFetchAndStreamBack(requestId, payload, retryCount = 0) {
         console.log(`[API Bridge] 当前操作域名: ${window.location.hostname}`);
         const { is_image_request, message_templates, target_model_id, session_id, message_id } = payload;
-        
+
         // 重试配置
         const MAX_RETRIES = 5;
         const BASE_DELAY = 1000; // 1秒基础延迟
         const MAX_DELAY = 30000; // 最大延迟30秒
-        
+
         if (retryCount > 0) {
             console.log(`[API Bridge] 🔄 重试请求 ${requestId.substring(0, 8)}，重试次数: ${retryCount}/${MAX_RETRIES}`);
         }
@@ -162,9 +171,9 @@
         // URL 对于聊天和文生图是相同的
         const apiUrl = `/nextjs-api/stream/retry-evaluation-session-message/${session_id}/messages/${message_id}`;
         const httpMethod = 'PUT';
-        
+
         console.log(`[API Bridge] 使用 API 端点: ${apiUrl}`);
-        
+
         const newMessages = [];
         let lastMsgIdInChain = null;
 
@@ -181,7 +190,7 @@
             const template = message_templates[i];
             const currentMsgId = crypto.randomUUID();
             const parentIds = lastMsgIdInChain ? [lastMsgIdInChain] : [];
-            
+
             // 如果是文生图请求，状态总是 'success'
             // 否则，只有最后一条消息是 'pending'
             const status = is_image_request ? 'success' : ((i === message_templates.length - 1) ? 'pending' : 'success');
@@ -243,7 +252,7 @@
                 if (visibilityManager.isHidden) {
                     // 页面在后台时，批量缓冲数据到请求专属buffer
                     requestBuffer.queue.push(data);
-                    
+
                     // 清除旧timer并设置新的
                     if (requestBuffer.timer) {
                         clearTimeout(requestBuffer.timer);
@@ -280,13 +289,13 @@
                     if (!hasReceivedContent || totalBytes === 0) {
                         emptyResponseDetected = true;
                         console.warn(`[API Bridge] ⚠️ 检测到空响应！请求 ${requestId.substring(0, 8)}，总字节数: ${totalBytes}`);
-                        
+
                         // 如果还有重试机会
                         if (retryCount < MAX_RETRIES) {
                             // 计算指数退避延迟
                             const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), MAX_DELAY);
                             console.log(`[API Bridge] ⏳ 等待 ${delay/1000} 秒后重试...`);
-                            
+
                             // 发送重试通知给服务器
                             sendToServer(requestId, {
                                 retry_info: {
@@ -296,10 +305,10 @@
                                     reason: "Empty response detected"
                                 }
                             });
-                            
+
                             // 等待指定时间
                             await new Promise(resolve => setTimeout(resolve, delay));
-                            
+
                             // 递归重试
                             await executeFetchAndStreamBack(requestId, payload, retryCount + 1);
                             return; // 重要：返回避免发送 [DONE]
@@ -314,15 +323,15 @@
                             return;
                         }
                     }
-                    
+
                     // 正常响应结束
                     console.log(`[API Bridge] ✅ 请求 ${requestId.substring(0, 8)} 的流已成功结束。`);
                     console.log(`[API Bridge Debug] 流统计: ${chunkCount} 块, ${totalBytes} 字节, 耗时 ${(Date.now() - startTime) / 1000} 秒`);
-                    
+
                     if (retryCount > 0) {
                         console.log(`[API Bridge] 🎉 重试成功！在第 ${retryCount + 1} 次尝试时获得有效响应。`);
                     }
-                    
+
                     // 发送请求buffer中的剩余数据
                     if (requestBuffer.queue.length > 0) {
                         const remainingData = requestBuffer.queue.join('');
@@ -333,52 +342,52 @@
                         }
                         sendToServer(requestId, remainingData);
                     }
-                    
+
                     // 如果还有未发送的buffer数据
                     if (buffer) {
                         sendToServer(requestId, buffer);
                     }
-                    
+
                     sendToServer(requestId, "[DONE]");
                     break;
                 }
-                
+
                 chunkCount++;
                 totalBytes += value.length;
-                
+
                 const chunk = decoder.decode(value, { stream: true });
                 buffer += chunk;
-                
+
                 // 解析文本块和思维链块（移除延迟机制）
                 // 匹配 [ab]0: (正文), ag: (思维链), [ab]2: (图片), [ab]d: (完成)
                 const contentPattern = /(?:[ab]0|ag|[ab]2|[ab]d):"((?:\\.|[^"\\])*)"|(?:[ab]d:\{[^}]*\})/g;
                 let match;
                 let lastIndex = 0;
-                
+
                 while ((match = contentPattern.exec(buffer)) !== null) {
                     const matchedBlock = match[0];
                     const blockToSend = buffer.substring(lastIndex, match.index + matchedBlock.length);
-                    
+
                     // 标记已收到内容
                     hasReceivedContent = true;
-                    
+
                     // 使用优化的发送机制（无延迟）
                     processAndSend(requestId, blockToSend);
-                    
+
                     lastIndex = match.index + matchedBlock.length;
                 }
-                
+
                 // 更新buffer
                 if (lastIndex > 0) {
                     buffer = buffer.substring(lastIndex);
                 }
-                
+
                 // 如果buffer太大，发送出去
                 if (buffer.length > 10000) {
                     processAndSend(requestId, buffer);
                     buffer = '';
                 }
-                
+
                 // 使用 requestAnimationFrame 替代 setTimeout（仅在前台时）
                 if (!visibilityManager.isHidden) {
                     await new Promise(resolve => {
@@ -393,7 +402,7 @@
 
         } catch (error) {
             console.error(`[API Bridge] ❌ 在为请求 ${requestId.substring(0, 8)} 执行 fetch 时出错:`, error);
-            
+
             // 判断是否应该重试
             const shouldRetry = (
                 retryCount < MAX_RETRIES &&
@@ -403,12 +412,12 @@
                  error.message.includes('503') ||
                  error.message.includes('504'))
             );
-            
+
             if (shouldRetry) {
                 // 计算指数退避延迟
                 const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), MAX_DELAY);
                 console.log(`[API Bridge] ⏳ 网络错误，等待 ${delay/1000} 秒后重试...`);
-                
+
                 // 发送重试通知
                 sendToServer(requestId, {
                     retry_info: {
@@ -418,13 +427,13 @@
                         reason: error.message
                     }
                 });
-                
+
                 // 等待并重试
                 await new Promise(resolve => setTimeout(resolve, delay));
                 await executeFetchAndStreamBack(requestId, payload, retryCount + 1);
                 return;
             }
-            
+
             // 清理请求buffer
             if (requestBuffer.queue.length > 0) {
                 const remainingData = requestBuffer.queue.join('');
@@ -435,7 +444,7 @@
                 }
                 sendToServer(requestId, remainingData);
             }
-            
+
             sendToServer(requestId, {
                 error: error.message,
                 retry_count: retryCount,
@@ -538,13 +547,18 @@
     // --- 启动连接 ---
     console.log("========================================");
     console.log("  LMArena API Bridge v2.7 正在运行。");
+    console.log(`  📋 标签页ID: ${TAB_ID}`);
+    console.log("  ✅ 支持多标签页并发（绕过6连接限制）");
     console.log("  ✅ 修复了标签页后台时的流式响应冻结问题");
     console.log("  ✅ 新增：自动重试机制处理空响应");
     console.log("  - 聊天功能已连接到 ws://localhost:5102");
     console.log("  - ID 捕获器将发送到 http://localhost:5103");
-    console.log("  - 空响应自动重试：最多5次，指数退避");
+    console.log("  💡 提示：打开多个标签页可提升并发能力");
+    console.log("     - 1个标签页 = 6并发");
+    console.log("     - 2个标签页 = 12并发");
+    console.log("     - 3个标签页 = 18并发");
     console.log("========================================");
-    
+
     connect(); // 建立 WebSocket 连接
 
 })();

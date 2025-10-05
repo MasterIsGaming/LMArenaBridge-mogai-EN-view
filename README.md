@@ -145,7 +145,45 @@ if (visibilityManager.isHidden) {
 - ✅ 页面后台不冻结
 - ✅ 整体响应速度提升**2-3倍**
 
-##### 3. 内存管理优化
+##### 3. 多标签页并发（绕过6连接限制）
+
+**问题背景**：Chrome/Edge等现代浏览器基于HTTP/1.1协议，对同一域名（`lmarena.ai`）的并发连接数限制为6个。这导致即使有多个模型和会话，也只能同时处理6个请求，其余请求会排队等待（Stalled）。
+
+**解决方案**：
+```python
+# api_server.py: 自动负载均衡
+# 1. 管理多个WebSocket连接
+browser_connections: dict[str, WebSocket] = {}
+
+# 2. 选择负载最低的标签页
+async def select_best_tab_for_request():
+    best_tab_id = min(tab_loads, key=tab_loads.get)
+    return browser_connections[best_tab_id]
+
+# 3. 自动释放和追踪计数
+async def release_tab_request(tab_id: str):
+    tab_request_counts[tab_id] -= 1
+```
+```javascript
+// LMArenaApiBridge.js: 发送唯一标签页ID
+const TAB_ID = `tab_${Date.now()}`;
+socket.send(JSON.stringify({ tab_id: TAB_ID }));
+```
+
+**性能提升**：
+- ✅ **突破6并发限制**：并发能力与标签页数量成正比。
+- ✅ **智能负载均衡**：自动将请求分配到最空闲的标签页。
+- ✅ **向后兼容**：单个标签页仍可正常工作。
+- ✅ **可视化提示**：服务器启动时会显示当前并发能力。
+
+**并发能力对照**：
+| 标签页数量 | 理论最大并发 | 适用场景 |
+|-----------|-------------|---------|
+| 1个标签页 | 6个请求 | 轻度使用 |
+| **2个标签页** | **12个请求** | **推荐配置** |
+| 3个标签页 | 18个请求 | 重度使用 |
+
+##### 4. 内存管理优化
 
 **问题背景**：长时间运行导致内存持续增长，最终崩溃。
 
@@ -1272,6 +1310,7 @@ GET http://127.0.0.1:5102/api/monitor/performance
 ### 核心功能
 
 - **🚀 高性能后端**
+  - **多标签页并发**，突破浏览器6连接限制
   - 基于 FastAPI 和 Uvicorn 的异步架构
   - 优化的连接池和并发控制
   - 智能内存管理和垃圾回收
@@ -2235,7 +2274,13 @@ A: 完全支持！可以在messages中混合文本和图片：
 
 ## 📝 更新日志
 
-### v2.7.6 (最新)
+### v2.8.0 (最新)
+
+- 🆕 **新增**：**多标签页并发支持**，通过负载均衡突破浏览器6连接限制。
+- 🔧 **修复**：并发请求计数器未释放导致负载均衡失效的严重Bug。
+- 📚 **文档**：添加了详细的多标签页使用说明和新功能介绍。
+
+### v2.7.6
 
 - ✅ 优化WebSocket流式传输性能
 - ✅ 修复请求元数据内存泄漏

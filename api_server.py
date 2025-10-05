@@ -4,38 +4,36 @@
 import asyncio
 import json
 import logging
-import os
-import sys
-import subprocess
-import time
-import uuid
-import re
-import threading
-import random
 import mimetypes
-from datetime import datetime
+import os
+import random
+import re
+import subprocess
+import threading
+import uuid
 from contextlib import asynccontextmanager
-from collections import deque
-from threading import Lock
-
+from datetime import datetime
 from pathlib import Path
-
-import uvicorn
-import requests
-import aiohttp  # 新增：用于异步HTTP请求
-from asyncio import Semaphore
+from threading import Lock
 from typing import Optional, Tuple
-from packaging.version import parse as parse_version
+
+import aiohttp  # 新增：用于异步HTTP请求
+import requests
+import sys
+import time
+import urllib3
+import uvicorn
+from asyncio import Semaphore
+from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response, HTMLResponse
-
 # --- 内部模块导入 ---
 from modules.file_uploader import upload_to_file_bed
 from modules.monitoring import monitoring_service, MonitorConfig
-# 图像自动增强功能已移除（已剥离为独立项目）
+from packaging.version import parse as parse_version
 
-import urllib3
+# 图像自动增强功能已移除（已剥离为独立项目）
 # 全局禁用SSL警告（可选，但推荐）
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -57,15 +55,21 @@ logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 # --- 全局状态与配置 ---
 CONFIG = {} # 存储从 config.jsonc 加载的配置
-# browser_ws 用于存储与单个油猴脚本的 WebSocket 连接。
-# 注意：此架构假定只有一个浏览器标签页在工作。
-# 如果需要支持多个并发标签页，需要将此扩展为字典管理多个连接。
+# 新增：支持多标签页并发连接
+# browser_connections 用于存储多个油猴脚本的 WebSocket 连接
+# 键是标签页ID（tab_id），值是 WebSocket 对象
+browser_connections: dict[str, WebSocket] = {}
+browser_connections_lock = asyncio.Lock()  # 保护并发访问
+# 兼容性：保留browser_ws用于向后兼容（指向第一个连接）
 browser_ws: WebSocket | None = None
 # response_channels 用于存储每个 API 请求的响应队列。
 # 键是 request_id，值是 asyncio.Queue。
 response_channels: dict[str, asyncio.Queue] = {}
 # 新增：请求元数据存储（用于WebSocket重连后恢复请求）
 request_metadata: dict[str, dict] = {}
+# 新增：跟踪每个标签页的活跃请求数
+tab_request_counts: dict[str, int] = {}
+tab_request_counts_lock = asyncio.Lock()
 last_activity_time = None # 记录最后一次活动的时间
 idle_monitor_thread = None # 空闲监控线程
 main_event_loop = None # 主事件循环
@@ -496,9 +500,16 @@ async def lifespan(app: FastAPI):
     MAX_CONCURRENT_DOWNLOADS = CONFIG.get("max_concurrent_downloads", 50)
     pool_config = CONFIG.get("connection_pool", {})
     
+    # 🔧 创建自定义SSL上下文（修复CloudFlare R2的SSL连接问题）
+    import ssl
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False  # 禁用主机名检查
+    ssl_context.verify_mode = ssl.CERT_NONE  # 禁用证书验证
+    logger.info("🔒 已创建自定义SSL上下文（禁用证书验证以提高连接稳定性）")
+    
     # 创建优化的全局aiohttp会话
     connector = aiohttp.TCPConnector(
-        ssl=False,
+        ssl=ssl_context,  # 🔧 使用自定义SSL上下文而不是False
         limit=pool_config.get("total_limit", 200),                  # 增加总连接数
         limit_per_host=pool_config.get("per_host_limit", 50),      # 每个主机的连接限制
         ttl_dns_cache=pool_config.get("dns_cache_ttl", 300),       # DNS缓存时间
@@ -615,6 +626,53 @@ def save_config():
     except Exception as e:
         logger.error(f"❌ 写入 config.jsonc 时发生错误: {e}", exc_info=True)
 
+# --- 负载均衡函数 ---
+async def select_best_tab_for_request() -> Tuple[str, WebSocket]:
+    """
+    选择负载最低的标签页来处理新请求。
+    返回 (tab_id, websocket)
+    """
+    global browser_connections, tab_request_counts
+    
+    async with browser_connections_lock:
+        if not browser_connections:
+            raise HTTPException(status_code=503, detail="没有可用的浏览器连接")
+        
+        # 🔧 关键修复：清理已断开连接的标签页计数
+        stale_tabs = [tab_id for tab_id in tab_request_counts.keys() if tab_id not in browser_connections]
+        for tab_id in stale_tabs:
+            del tab_request_counts[tab_id]
+            logger.debug(f"[LOAD_BALANCE] 清理已断开标签页 '{tab_id}' 的计数")
+        
+        # 确保所有活跃标签页都有计数
+        for tab_id in browser_connections.keys():
+            if tab_id not in tab_request_counts:
+                tab_request_counts[tab_id] = 0
+        
+        # 🔧 关键修复：只从活跃连接中选择（而不是从tab_request_counts中选择）
+        # 计算每个活跃标签页的当前负载
+        active_tab_loads = {tab_id: tab_request_counts.get(tab_id, 0) for tab_id in browser_connections.keys()}
+        
+        # 选择负载最低的标签页
+        best_tab_id = min(active_tab_loads, key=active_tab_loads.get)
+        best_ws = browser_connections[best_tab_id]
+        
+        # 增加该标签页的请求计数
+        tab_request_counts[best_tab_id] += 1
+        
+        logger.info(f"[LOAD_BALANCE] 选择标签页 '{best_tab_id}' (当前负载: {tab_request_counts[best_tab_id]}/6)")
+        logger.info(f"[LOAD_BALANCE] 所有标签页负载: {tab_request_counts}")
+        
+        return best_tab_id, best_ws
+
+async def release_tab_request(tab_id: str):
+    """释放标签页的请求计数"""
+    global tab_request_counts
+    
+    async with tab_request_counts_lock:
+        if tab_id in tab_request_counts and tab_request_counts[tab_id] > 0:
+            tab_request_counts[tab_id] -= 1
+            logger.debug(f"[LOAD_BALANCE] 释放标签页 '{tab_id}' 的请求 (剩余负载: {tab_request_counts[tab_id]}/6)")
 
 async def _process_openai_message(message: dict) -> dict:
     """
@@ -1770,6 +1828,13 @@ async def _process_lmarena_stream(request_id: str):
             logger.info(f"  - 总字符数: {total_chars}")
             logger.info(f"  - 平均块大小: {total_chars/chunk_count:.1f}字符")
             logger.info(f"  - 平均yield间隔: {total_time/chunk_count:.3f}秒")
+        
+        # 🔧 关键修复：释放标签页请求计数
+        if request_id in request_metadata:
+            tab_id = request_metadata[request_id].get("tab_id")
+            if tab_id:
+                await release_tab_request(tab_id)
+                logger.debug(f"PROCESSOR [ID: {request_id[:8]}]: 已释放标签页 '{tab_id}' 的请求计数")
             
         if request_id in response_channels:
             del response_channels[request_id]
@@ -2080,29 +2145,82 @@ async def non_stream_response(request_id: str, model: str):
         output_tokens=len(full_response_for_monitoring) // 4
     )
     
+    # 🔧 关键修复：释放标签页请求计数
+    if request_id in request_metadata:
+        tab_id = request_metadata[request_id].get("tab_id")
+        if tab_id:
+            await release_tab_request(tab_id)
+            logger.debug(f"NON-STREAM [ID: {request_id[:8]}]: 已释放标签页 '{tab_id}' 的请求计数")
+    
     return Response(content=json.dumps(response_data, ensure_ascii=False), media_type="application/json")
 
 # --- WebSocket 端点 ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """处理来自油猴脚本的 WebSocket 连接。"""
-    global browser_ws, IS_REFRESHING_FOR_VERIFICATION
+    """处理来自油猴脚本的 WebSocket 连接（支持多标签页）。"""
+    global browser_ws, browser_connections, IS_REFRESHING_FOR_VERIFICATION
     await websocket.accept()
     
+    # 等待第一条消息（可能包含标签页ID）
+    tab_id = "default"  # 默认标签页ID（向后兼容）
+    first_message_handled = False
+    
+    try:
+        # 设置3秒超时等待可能的标签页ID
+        init_message_str = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+        init_message = json.loads(init_message_str)
+        
+        # 检查是否包含tab_id
+        if "tab_id" in init_message:
+            tab_id = init_message["tab_id"]
+            first_message_handled = True
+            logger.info(f"[WS_CONN] 📋 收到标签页ID: {tab_id}")
+        else:
+            # 旧版本脚本，没有发送tab_id，这条消息需要在后面处理
+            logger.warning(f"[WS_CONN] ⚠️ 未检测到tab_id，使用默认值（可能是旧版本脚本）")
+            # 暂存这条消息，稍后处理
+            first_real_message = init_message_str
+    except asyncio.TimeoutError:
+        logger.warning(f"[WS_CONN] ⚠️ 等待tab_id超时，使用默认值（可能是旧版本脚本）")
+    except json.JSONDecodeError:
+        logger.warning(f"[WS_CONN] ⚠️ 无法解析初始化消息，使用默认tab_id")
+    
     # 使用锁保护WebSocket连接的修改
-    async with ws_lock:
-        if browser_ws is not None:
-            logger.warning("检测到新的油猴脚本连接，旧的连接将被替换。")
-            logger.info(f"[WS_CONN] 替换连接，当前response_channels数量: {len(response_channels)}")
+    async with browser_connections_lock:
+        # 检查是否已有相同tab_id的连接
+        if tab_id in browser_connections:
+            logger.warning(f"[WS_CONN] 标签页 {tab_id} 已存在连接，将被新连接替换")
+        
+        browser_connections[tab_id] = websocket
+        
+        # 兼容性：将第一个连接设置为browser_ws
+        if not browser_ws or tab_id == "default":
+            browser_ws = websocket
         
         # 只要有新的连接建立，就意味着人机验证流程已结束（或从未开始）
         if IS_REFRESHING_FOR_VERIFICATION:
             logger.info("✅ 新的 WebSocket 连接已建立，人机验证状态已自动重置。")
             IS_REFRESHING_FOR_VERIFICATION = False
-            
-        logger.info("✅ 油猴脚本已成功连接 WebSocket。")
-        logger.info(f"[WS_CONN] 新连接建立，当前response_channels数量: {len(response_channels)}")
-        browser_ws = websocket
+        
+        # 计算并发能力
+        concurrent_capacity = len(browser_connections) * 6
+        logger.info("="*80)
+        logger.info(f"✅ 标签页 '{tab_id}' 已成功连接 WebSocket")
+        logger.info(f"📊 当前连接状态:")
+        logger.info(f"  - 活跃标签页数: {len(browser_connections)}")
+        logger.info(f"  - 理论最大并发: {concurrent_capacity} 个请求 (每标签页6个)")
+        logger.info(f"  - 未处理请求数: {len(response_channels)}")
+        
+        # 并发限制提示
+        if len(browser_connections) == 1:
+            logger.warning(f"⚠️  注意：单标签页模式，浏览器HTTP/1.1限制并发为6个请求")
+            logger.warning(f"💡 如需更高并发，请打开额外的LMArena标签页并运行油猴脚本")
+            logger.warning(f"   - 2个标签页 = 12并发")
+            logger.warning(f"   - 3个标签页 = 18并发")
+        else:
+            logger.info(f"✅ 多标签页模式已激活！当前支持 {concurrent_capacity} 个并发请求")
+        
+        logger.info("="*80)
     
     # 广播浏览器连接状态到监控面板
     await monitoring_service.broadcast_to_monitors({
@@ -2176,6 +2294,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.info(f"[REQUEST_RECOVERY] 没有可恢复的请求")
 
     try:
+        # 如果第一条消息未被处理（旧版本脚本），需要先处理它
+        if not first_message_handled and 'first_real_message' in locals():
+            message_str = first_real_message
+            message = json.loads(message_str)
+            
+            request_id = message.get("request_id")
+            data = message.get("data")
+            
+            if request_id and data is not None:
+                if request_id in response_channels:
+                    await response_channels[request_id].put(data)
+                else:
+                    logger.warning(f"[WS_MSG] 收到未知或已关闭请求的响应: {request_id}")
+        
         while True:
             # 等待并接收来自油猴脚本的消息
             message_str = await websocket.receive_text()
@@ -2185,7 +2317,7 @@ async def websocket_endpoint(websocket: WebSocket):
             data = message.get("data")
 
             if not request_id or data is None:
-                logger.warning(f"收到来自浏览器的无效消息: {message}")
+                logger.warning(f"[WS_MSG] 收到来自浏览器的无效消息: {message}")
                 continue
 
             # 诊断：记录WebSocket消息
@@ -2209,16 +2341,33 @@ async def websocket_endpoint(websocket: WebSocket):
             if request_id in response_channels:
                 await response_channels[request_id].put(data)
             else:
-                logger.warning(f"⚠️ 收到未知或已关闭请求的响应: {request_id}")
+                logger.warning(f"[WS_MSG] 收到未知或已关闭请求的响应: {request_id}")
 
     except WebSocketDisconnect:
-        logger.warning("❌ 油猴脚本客户端已断开连接。")
+        logger.warning(f"❌ 标签页 '{tab_id}' 已断开连接。")
     except Exception as e:
-        logger.error(f"WebSocket 处理时发生未知错误: {e}", exc_info=True)
+        logger.error(f"[WS_ERROR] 标签页 '{tab_id}' WebSocket处理时发生错误: {e}", exc_info=True)
     finally:
-        async with ws_lock:
-            browser_ws = None
-            logger.info(f"[WS_CONN] 连接断开，未处理请求数: {len(response_channels)}")
+        async with browser_connections_lock:
+            # 移除断开的标签页连接
+            if tab_id in browser_connections:
+                del browser_connections[tab_id]
+                logger.info(f"[WS_CONN] 标签页 '{tab_id}' 已移除")
+            
+            # 更新browser_ws（向后兼容）
+            if browser_connections:
+                # 如果还有其他连接，使用第一个
+                browser_ws = list(browser_connections.values())[0]
+                logger.info(f"[WS_CONN] browser_ws已更新为剩余的{len(browser_connections)}个连接中的第一个")
+            else:
+                browser_ws = None
+                logger.info(f"[WS_CONN] 所有标签页已断开")
+            
+            # 计算剩余并发能力
+            remaining_capacity = len(browser_connections) * 6
+            logger.info(f"[WS_CONN] 剩余活跃标签页: {len(browser_connections)}")
+            logger.info(f"[WS_CONN] 剩余并发能力: {remaining_capacity} 个请求")
+            logger.info(f"[WS_CONN] 未处理请求数: {len(response_channels)}")
             
         # 广播浏览器断开状态到监控面板
         await monitoring_service.broadcast_to_monitors({
@@ -2833,9 +2982,14 @@ async def chat_completions(request: Request):
         }
         
         
-        # 3. 通过 WebSocket 发送
-        logger.info(f"API CALL [ID: {request_id[:8]}]: 正在通过 WebSocket 发送载荷到油猴脚本。")
-        await browser_ws.send_text(json.dumps(message_to_browser))
+        # 3. 选择最佳标签页并通过 WebSocket 发送（负载均衡）
+        selected_tab_id, selected_ws = await select_best_tab_for_request()
+        
+        # 保存标签页ID到请求元数据
+        request_metadata[request_id]["tab_id"] = selected_tab_id
+        
+        logger.info(f"API CALL [ID: {request_id[:8]}]: 通过标签页 '{selected_tab_id}' 发送请求")
+        await selected_ws.send_text(json.dumps(message_to_browser))
 
         # 4. 根据 stream 参数决定返回类型
         is_stream = openai_req.get("stream", False)
@@ -2875,6 +3029,14 @@ async def chat_completions(request: Request):
             "request_id": request_id,
             "success": False
         })
+        
+        # 🔧 关键修复：释放标签页请求计数
+        if request_id in request_metadata:
+            tab_id = request_metadata[request_id].get("tab_id")
+            if tab_id:
+                await release_tab_request(tab_id)
+                logger.debug(f"API CALL [ID: {request_id[:8]}]: 错误处理中已释放标签页 '{tab_id}' 的请求计数")
+        
         if request_id in response_channels:
             del response_channels[request_id]
         # 清理元数据
@@ -2895,6 +3057,14 @@ async def chat_completions(request: Request):
             "request_id": request_id,
             "success": False
         })
+        
+        # 🔧 关键修复：释放标签页请求计数
+        if request_id in request_metadata:
+            tab_id = request_metadata[request_id].get("tab_id")
+            if tab_id:
+                await release_tab_request(tab_id)
+                logger.debug(f"API CALL [ID: {request_id[:8]}]: 错误处理中已释放标签页 '{tab_id}' 的请求计数")
+        
         if request_id in response_channels:
             del response_channels[request_id]
         # 清理元数据
@@ -3053,8 +3223,7 @@ async def get_request_details(request_id: str):
 async def download_logs(log_type: str = "requests"):
     """下载日志文件"""
     from fastapi.responses import FileResponse
-    import os
-    
+
     if log_type == "requests":
         log_path = MonitorConfig.LOG_DIR / MonitorConfig.REQUEST_LOG_FILE
     elif log_type == "errors":
@@ -3076,9 +3245,7 @@ async def download_logs(log_type: str = "requests"):
 @app.get("/api/images/list")
 async def get_image_list():
     """获取downloaded_images目录中的图片列表（包括子文件夹）"""
-    import os
-    from datetime import datetime
-    
+
     images = []
     image_dir = IMAGE_SAVE_DIR
     
@@ -3313,6 +3480,14 @@ async def handle_single_completion(openai_req: dict):
         await monitoring_service.broadcast_to_monitors({
             "type": "request_end", "request_id": request_id, "success": False
         })
+        
+        # 🔧 关键修复：释放标签页请求计数
+        if request_id in request_metadata:
+            tab_id = request_metadata[request_id].get("tab_id")
+            if tab_id:
+                await release_tab_request(tab_id)
+                logger.debug(f"重试函数错误处理中已释放标签页 '{tab_id}' 的请求计数")
+        
         if request_id in response_channels:
             del response_channels[request_id]
         # 清理元数据
@@ -3334,8 +3509,30 @@ async def _download_image_data_with_retry(url: str) -> Tuple[Optional[bytes], Op
     max_retries = CONFIG.get("download_timeout", {}).get("max_retries", 2)
     retry_delays = [1, 2]  # 减少重试延迟
     
+    # 🔍 诊断日志：并发控制状态
+    semaphore_available = DOWNLOAD_SEMAPHORE._value if DOWNLOAD_SEMAPHORE else 0
+    logger.info(f"[DOWNLOAD_DEBUG] 准备下载图片")
+    logger.info(f"  - 可用下载槽: {semaphore_available}/{MAX_CONCURRENT_DOWNLOADS}")
+    logger.info(f"  - 活跃下载: {MAX_CONCURRENT_DOWNLOADS - semaphore_available}")
+    logger.info(f"  - 最大重试: {max_retries}")
+    logger.info(f"  - URL前100字符: {url[:100]}...")
+    
+    # 🔧 下载延迟机制（避免TCP端口耗尽）
+    delay_config = CONFIG.get("download_delay", {})
+    if delay_config.get("enabled", False):
+        delay_seconds = delay_config.get("delay_seconds", 0.5)
+        logger.info(f"[DOWNLOAD_DEBUG] ⏱️ 延迟 {delay_seconds} 秒后开始（避免并发冲突）")
+        await asyncio.sleep(delay_seconds)
+    
+    # 记录等待信号量的时间
+    import time as time_module
+    wait_start = time_module.time()
+    
     # 使用信号量控制并发
     async with DOWNLOAD_SEMAPHORE:
+        wait_time = time_module.time() - wait_start
+        if wait_time > 1:
+            logger.warning(f"[DOWNLOAD_DEBUG] ⚠️ 等待下载槽耗时: {wait_time:.2f}秒（并发阻塞！）")
         for retry_count in range(max_retries):
             try:
                 headers = {
@@ -3346,9 +3543,14 @@ async def _download_image_data_with_retry(url: str) -> Tuple[Optional[bytes], Op
                 }
                 
                 if not aiohttp_session:
-                    # 创建紧急会话
-                    connector = aiohttp.TCPConnector(ssl=False, limit=100, limit_per_host=30)
+                    # 🔧 创建紧急会话（使用相同的SSL配置）
+                    import ssl
+                    ssl_context = ssl.create_default_context()
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+                    connector = aiohttp.TCPConnector(ssl=ssl_context, limit=100, limit_per_host=30)
                     aiohttp_session = aiohttp.ClientSession(connector=connector)
+                    logger.warning("[DOWNLOAD_DEBUG] 创建了紧急aiohttp会话（使用自定义SSL上下文）")
                 
                 # 优化的超时设置（从配置读取）
                 timeout_config = CONFIG.get("download_timeout", {})
@@ -3358,9 +3560,18 @@ async def _download_image_data_with_retry(url: str) -> Tuple[Optional[bytes], Op
                     sock_read=timeout_config.get("sock_read", 10)
                 )
                 
+                # 🔍 诊断日志：超时配置
+                logger.info(f"[DOWNLOAD_DEBUG] 重试 #{retry_count + 1}/{max_retries}")
+                logger.info(f"  - 连接超时: {timeout_config.get('connect', 5)}秒")
+                logger.info(f"  - 读取超时: {timeout_config.get('sock_read', 10)}秒")
+                logger.info(f"  - 总超时: {timeout_config.get('total', 30)}秒")
+                
                 # 添加性能日志
                 import time as time_module
                 start_time = time_module.time()
+                
+                # 🔍 诊断日志：连接开始
+                logger.info(f"[DOWNLOAD_DEBUG] 开始建立连接...")
                 
                 async with aiohttp_session.get(
                     url,
@@ -3368,33 +3579,62 @@ async def _download_image_data_with_retry(url: str) -> Tuple[Optional[bytes], Op
                     headers=headers,
                     allow_redirects=True
                 ) as response:
+                    connect_time = time_module.time() - start_time
+                    logger.info(f"[DOWNLOAD_DEBUG] 连接建立成功，耗时: {connect_time:.2f}秒")
+                    
                     if response.status == 200:
+                        logger.info(f"[DOWNLOAD_DEBUG] HTTP 200 OK，开始读取数据...")
+                        read_start = time_module.time()
                         data = await response.read()
+                        read_time = time_module.time() - read_start
                         download_time = time_module.time() - start_time
+                        
+                        # 🔍 详细性能分析
+                        logger.info(f"[DOWNLOAD_DEBUG] 下载完成")
+                        logger.info(f"  - 连接时间: {connect_time:.2f}秒")
+                        logger.info(f"  - 读取时间: {read_time:.2f}秒")
+                        logger.info(f"  - 总时间: {download_time:.2f}秒")
+                        logger.info(f"  - 数据大小: {len(data) / 1024:.1f}KB")
+                        logger.info(f"  - 下载速度: {(len(data) / 1024) / download_time:.1f}KB/s")
                         
                         # 记录慢速下载
                         slow_threshold = CONFIG.get("performance_monitoring", {}).get("slow_threshold_seconds", 10)
                         if download_time > slow_threshold:
-                            logger.warning(f"[DOWNLOAD] 下载耗时较长: {download_time:.2f}秒")
-                        else:
-                            logger.debug(f"[DOWNLOAD] 下载成功: {download_time:.2f}秒")
+                            logger.warning(f"[DOWNLOAD] ⚠️ 下载耗时较长: {download_time:.2f}秒 (阈值: {slow_threshold}秒)")
                         
                         return data, None
                     else:
                         last_error = f"HTTP {response.status}"
+                        logger.error(f"[DOWNLOAD_DEBUG] ❌ HTTP错误: {response.status}")
                         
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as e:
+                elapsed = time_module.time() - start_time
                 last_error = f"超时（第{retry_count+1}次尝试）"
-                logger.warning(f"[DOWNLOAD] 下载超时: {url[:100]}...")
+                logger.error(f"[DOWNLOAD_DEBUG] ❌ 超时")
+                logger.error(f"  - 已等待: {elapsed:.2f}秒")
+                logger.error(f"  - 配置总超时: {timeout_config.get('total', 30)}秒")
+                logger.error(f"  - 可能原因: 网络慢、服务器响应慢、或数据量大")
             except aiohttp.ClientError as e:
+                elapsed = time_module.time() - start_time
                 last_error = f"网络错误: {str(e)}"
-                logger.warning(f"[DOWNLOAD] 网络错误: {e.__class__.__name__}")
+                logger.error(f"[DOWNLOAD_DEBUG] ❌ 网络错误: {e.__class__.__name__}")
+                logger.error(f"  - 错误详情: {str(e)[:200]}")
+                logger.error(f"  - 发生时间: {elapsed:.2f}秒后")
+                # 🔍 诊断SSL错误
+                if "SSL" in str(e) or "ssl" in str(e).lower():
+                    logger.error(f"  - 💡 检测到SSL错误，可能是证书问题或防火墙拦截")
             except Exception as e:
+                elapsed = time_module.time() - start_time
                 last_error = str(e)
-                logger.error(f"[DOWNLOAD] 未知错误: {e}")
+                logger.error(f"[DOWNLOAD_DEBUG] ❌ 未知错误: {e}")
+                logger.error(f"  - 错误类型: {type(e).__name__}")
+                logger.error(f"  - 发生时间: {elapsed:.2f}秒后")
             
+            # 重试延迟
             if retry_count < max_retries - 1:
-                await asyncio.sleep(retry_delays[retry_count])
+                delay = retry_delays[retry_count]
+                logger.info(f"[DOWNLOAD_DEBUG] 等待{delay}秒后重试...")
+                await asyncio.sleep(delay)
     
     return None, last_error
 
