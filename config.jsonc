@@ -1,94 +1,94 @@
 {
   // ============================================================
-  // 基础配置
+  // Basic Configuration
   // ============================================================
 
-  // 版本号（用于程序更新检查，请不要手动修改）
+  // Version number (used for program update checks, please do not modify manually)
   "version": "1.0.0-mogai",
 
-  // 当前 LMArena 页面的会话 ID（通过运行 id_updater.py 可以自动更新）
+  // Current LMArena page session ID (can be automatically updated by running id_updater.py)
   "session_id": "c6341952-952d-4a5a-86ab-61e407667a75",
 
-  // 当前会话的最后一条消息 ID（通过运行 id_updater.py 可以自动更新）
+  // Last message ID of the current session (can be automatically updated by running id_updater.py)
   "message_id": "0199a1ce-70b8-70a1-bcc3-3f04b155b850",
 
   // ============================================================
-  // ID 更新器专用配置
+  // ID Updater Specific Configuration
   // ============================================================
 
-  // id_updater.py 上次使用的模式（可选值: 'direct_chat' 或 'battle'）
+  // id_updater.py last used mode (optional values: 'direct_chat' or 'battle')
   "id_updater_last_mode": "direct_chat",
 
-  // id_updater.py 在 Battle 模式下要更新的目标（可选值: 'A' 或 'B'）
+  // id_updater.py target to update in Battle mode (optional values: 'A' or 'B')
   "id_updater_battle_target": "B",
 
   // ============================================================
-  // 更新设置
+  // Update Settings
   // ============================================================
 
-  // 是否自动检查更新（启用后，程序启动时会连接到 GitHub 检查新版本）
+  // Whether to automatically check for updates (if enabled, the program will connect to GitHub to check for new versions on startup)
   "enable_auto_update": true,
 
   // ============================================================
-  // 重试与容错设置
+  // Retry and Fault Tolerance Settings
   // ============================================================
 
-  // 是否启用自动重试（启用后，浏览器连接断开时新的API请求将被暂存，并在连接恢复后自动重试）
+  // Whether to enable automatic retry (if enabled, new API requests will be staged when the browser connection is lost and automatically retried when the connection is restored)
   "enable_auto_retry": true,
 
-  // 自动重试的等待超时时间（秒）
-  // 当浏览器断开时，服务器将为每个请求等待此时长。如果超时后仍未重连，则返回503错误
+  // Auto-retry wait timeout (seconds)
+  // When the browser disconnects, the server will wait for this duration for each request. If not reconnected after the timeout, a 503 error will be returned.
   "retry_timeout_seconds": 60,
 
-  // 空响应自动重试配置（处理LMArena负载均衡导致的空响应问题）
+  // Empty response auto-retry configuration (handles empty response issues caused by LMArena load balancing)
   "empty_response_retry": {
-    // 是否启用空响应自动重试机制
+    // Whether to enable the empty response auto-retry mechanism
     "enabled": true,
-    // 最大重试次数
+    // Maximum number of retries
     "max_retries": 5,
-    // 基础延迟时间（毫秒）
+    // Base delay time (milliseconds)
     "base_delay_ms": 1000,
-    // 最大延迟时间（毫秒）
+    // Maximum delay time (milliseconds)
     "max_delay_ms": 30000,
-    // 是否向客户端显示重试信息
+    // Whether to show retry information to the client
     "show_retry_info_to_client": false
   },
 
   // ============================================================
-  // 绕过敏感词检测设置
+  // Bypass Sensitive Word Detection Settings
   // ============================================================
 
-  // 是否启用绕过敏感词检测
-  // 在原始用户请求的对话中额外注入一个消息，以尝试绕过敏感词审查
-  // 注意：当此项为 false 时，即使 bypass_settings 中有项为 true 也不会启用绕过
+  // Whether to enable bypassing sensitive word detection
+  // Injects an additional message into the original user request's conversation to attempt to bypass sensitive word censorship.
+  // Note: When this is false, even if an item in bypass_settings is true, bypassing will not be enabled.
   "bypass_enabled": true,
 
-  // 细粒度绕过模式设置（可以分别控制不同类型模型的绕过行为）
-  // 注意：这些设置只有在 bypass_enabled 为 true 时才会生效
+  // Granular bypass mode settings (can control bypass behavior for different model types separately)
+  // Note: These settings only take effect when bypass_enabled is true.
   "bypass_settings": {
-    // 文本模型的绕过开关
+    // Bypass switch for text models
     "text": true,
-    // search模型的绕过开关（搜索模型通常不需要绕过）
+    // Bypass switch for search models (search models usually do not require bypassing)
     "search": false,
-    // image模型的绕过开关（图像模型通常不需要绕过）
+    // Bypass switch for image models (image models usually do not require bypassing)
     "image": false
   },
 
-  // 绕过注入配置（定义绕过模式时注入的消息内容）
+  // Bypass injection configuration (defines the message content injected in bypass mode)
   "bypass_injection": {
-    // 当前激活的预设名称（可选值见下方 presets）
+    // Currently active preset name (see presets below for optional values)
     "active_preset": "1",
 
-    // 预设配置列表
+    // Preset configuration list
     "presets": {
-      // 默认预设：注入空用户消息
+      // Default preset: inject empty user message
       "default": {
         "role": "user",
         "content": " ",
         "participantPosition": "a"
       },
 
-      // 思维链预设：注入思维链提示
+      // Chain of thought preset: inject chain of thought prompt
       "thinking": {
         "role": "user",
         "content": "assistant：<think>",
@@ -104,22 +104,22 @@
         "content": "*",
         "participantPosition": "a"
       },
-      // Assistant引导预设：使用assistant角色,部分模型不支持以assistant角色为底部
+      // Assistant guidance preset: uses assistant role, some models do not support assistant role at the bottom
       "assistant_guide": {
         "role": "assistant",
-        "content": "我理解您的需求，让我来帮您。",
+        "content": "I understand your needs, let me help you.",
         "participantPosition": "b"
       },
 
-      // 系统提示预设：使用system角色，部分模型不支持以system角色为底部
+      // System prompt preset: uses system role, some models do not support system role at the bottom
       "system_prompt": {
         "role": "system",
-        "content": "请遵循用户的指令。",
+        "content": "Please follow the user's instructions.",
         "participantPosition": "b"
       }
     },
 
-    // 自定义配置（当 active_preset 指定的预设不存在时使用）
+    // Custom configuration (used when the preset specified by active_preset does not exist)
     "custom": {
       "role": "system",
       "content": "<think>",
@@ -127,73 +127,73 @@
     }
   },
 
-  // 智能图片附件审查绕过（专用于image模型）
-  // 当使用image模型且请求包含图片附件时，自动将文本内容分离到新请求中
-  // 使图片成为历史记录的一部分，从而绕过仅针对最新请求的审查系统
-  // 注：text模型已有绕过功能，search模型不需要（空内容会报错）
+  // Smart image attachment censorship bypass (specifically for image models)
+  // When using an image model and the request contains an image attachment, the text content is automatically separated into a new request.
+  // This makes the image part of the history, thereby bypassing censorship systems that only target the latest request.
+  // Note: Text models already have bypass functionality, search models do not need it (empty content will cause an error).
   "image_attachment_bypass_enabled": true,
 
   // ============================================================
-  // 图片处理设置
+  // Image Processing Settings
   // ============================================================
 
-  // 是否自动保存LMArena生成的图片到本地
+  // Whether to automatically save images generated by LMArena locally
   "save_images_locally": true,
 
-  // 本地保存格式设置（控制downloaded_images目录中保存的图片格式）
+  // Local save format settings (controls the format of images saved in the downloaded_images directory)
   "local_save_format": {
-    // 是否在保存时转换格式（false时保持原始格式）
+    // Whether to convert format when saving (keeps original format if false)
     "enabled": false,
-    // 目标格式（支持 "png", "jpeg", "webp", "original"）
+    // Target format (supports "png", "jpeg", "webp", "original")
     "format": "png",
-    // JPEG质量（仅在本地保存为JPEG时生效，范围1-100）
+    // JPEG quality (only effective when saving locally as JPEG, range 1-100)
     "jpeg_quality": 100
   },
 
-  // 图片返回格式设置（控制API如何返回图片给客户端）
+  // Image return format settings (controls how the API returns images to the client)
   "image_return_format": {
-    // 返回模式
-    // "url": 直接返回原始URL链接
-    // "base64": 将图片下载并转换为base64返回，避免链接失效
+    // Return mode
+    // "url": Directly return the original URL link
+    // "base64": Download and convert the image to base64 before returning, to prevent link expiration
     "mode": "base64",
 
-    // 当 mode 为 "base64" 时的转换设置
+    // Conversion settings when mode is "base64"
     "base64_conversion": {
       "enabled": true,
-      // 目标格式（支持 "png", "jpeg", "webp", "original"）
+      // Target format (supports "png", "jpeg", "webp", "original")
       "target_format": "png",
-      // JPEG质量（仅在转换为JPEG时生效，范围1-100）
+      // JPEG quality (only effective when converting to JPEG, range 1-100)
       "jpeg_quality": 100
     }
   },
 
   // ============================================================
-  // 酒馆模式设置
+  // Tavern Mode Settings
   // ============================================================
 
-  // 是否启用酒馆模式（专为需要完整历史记录注入的场景设计，如酒馆AI、SillyTavern等）
+  // Whether to enable Tavern Mode (designed for scenarios requiring full history injection, such as Tavern AI, SillyTavern, etc.)
   "tavern_mode_enabled": true,
 
   // ============================================================
-  // 文件床设置
+  // File Bed Settings
   // ============================================================
 
-  // 是否启用文件床
+  // Whether to enable file bed
   "file_bed_enabled": true,
 
-  // 图床选择策略
-  // "random": 每次上传随机选择一个图床，失败后尝试下一个
-  // "round_robin": 按顺序轮询使用图床，确保负载均衡
-  // "failover": 固定使用列表中的第一个可用图床，失败后自动切换到下一个并固定
+  // Image host selection strategy
+  // "random": Randomly select an image host for each upload, try the next one if it fails
+  // "round_robin": Use image hosts in sequence, ensuring load balancing
+  // "failover": Fixedly use the first available image host in the list, automatically switch to the next one and fix it if it fails
   "file_bed_selection_strategy": "round_robin",
 
-  // 多图床端点配置
-  // 在此列表中配置一个或多个图床，上传时将根据上面的策略选择一个启用的图床
+  // Multi-image host endpoint configuration
+  // Configure one or more image hosts in this list; an enabled image host will be selected according to the strategy above during upload.
   "file_bed_endpoints": [
     {
-      "name": "ImgBB (需要API Key)",
+      "name": "ImgBB (API Key required)",
       "enabled": true,
-      // 在 https://api.imgbb.com/ 获取API Key
+      // Get API Key at https://api.imgbb.com/
       "url": "https://api.imgbb.com/1/upload",
       "api_key": "98b97346b28e59ab6f1695718cf40eaa",
       "api_key_field": "key",
@@ -203,9 +203,9 @@
       "json_url_key": "data.url"
     },
     {
-      "name": "Freeimage.host (需要API Key)",
+      "name": "Freeimage.host (API Key required)",
       "enabled": true,
-      // 在 https://freeimage.host/page/api 获取API Key
+      // Get API Key at https://freeimage.host/page/api
       "url": "https://freeimage.host/api/1/upload",
       "api_key": "6d207e02198a847aa98d0a2a901485a5",
       "api_key_field": "key",
@@ -224,7 +224,7 @@
       "response_type": "text"
     },
     {
-      "name": "uguu.se (无需注册)",
+      "name": "uguu.se (No registration required)",
       "enabled": true,
       "url": "https://uguu.se/upload.php",
       "upload_mode": "form",
@@ -233,7 +233,7 @@
       "json_url_key": "files.0.url"
     },
     {
-      "name": "bashupload.com (无需注册)",
+      "name": "bashupload.com (No registration required)",
       "enabled": true,
       "url": "https://bashupload.com/",
       "api_key": "",
@@ -242,7 +242,7 @@
       "response_type": "text"
     },
     {
-      "name": "temp.sh (无需注册)",
+      "name": "temp.sh (No registration required)",
       "enabled": true,
       "url": "https://temp.sh/upload",
       "api_key": "",
@@ -254,145 +254,145 @@
   ],
 
   // ============================================================
-  // 模型映射设置
+  // Model Mapping Settings
   // ============================================================
 
-  // 当模型映射不存在时是否使用默认ID
-  // 如果设置为 true，当请求的模型在 model_endpoint_map.json 中找不到时，
-  // 将会使用 config.jsonc 中定义的全局 session_id 和 message_id
-  // 如果设置为 false，找不到映射时将返回错误
+  // Whether to use default IDs if model mapping does not exist
+  // If set to true, when the requested model is not found in model_endpoint_map.json,
+  // the global session_id and message_id defined in config.jsonc will be used.
+  // If set to false, an error will be returned if no mapping is found.
   "use_default_ids_if_mapping_not_found": true,
 
   // ============================================================
-  // 流式响应设置
+  // Streaming Response Settings
   // ============================================================
 
-  // 流式响应超时时间（秒）
-  // 服务器等待来自浏览器的下一个数据块的最长时间
-  // 如果您的网络连接较慢或模型响应时间很长，可以适当增加此值
+  // Streaming response timeout (seconds)
+  // The maximum time the server waits for the next data block from the browser.
+  // If your network connection is slow or the model response time is long, you can increase this value appropriately.
   "stream_response_timeout_seconds": 600,
 
-  // 是否强制流式刷新
-  // 启用后，每发送一个数据块后会立即刷新，确保数据即时传输给客户端
-  // 这可以解决客户端接收延迟的问题，但可能略微增加CPU使用
+  // Whether to force streaming flush
+  // If enabled, data will be flushed immediately after each data block is sent, ensuring real-time transmission to the client.
+  // This can solve client reception delay issues but may slightly increase CPU usage.
   "force_stream_flush": true,
 
-  // 是否启用流式传输调试
-  // 启用后，会在控制台输出详细的流式传输时间信息，有助于诊断传输延迟问题
+  // Whether to enable streaming debug
+  // If enabled, detailed streaming transmission time information will be output to the console, helping to diagnose transmission delay issues.
   "debug_stream_timing": false,
 
   // ============================================================
-  // 性能优化设置
+  // Performance Optimization Settings
   // ============================================================
 
-  // 最大并发下载数（控制同时下载图片的最大数量）
-  // 降低并发数以避免Windows TCP连接限制
+  // Maximum concurrent downloads (controls the maximum number of images downloaded simultaneously)
+  // Reduce concurrency to avoid Windows TCP connection limits.
   "max_concurrent_downloads": 3,
-  
-  // 下载延迟配置（避免同时发起过多连接）
+
+  // Download delay configuration (avoids initiating too many connections simultaneously)
   "download_delay": {
-    // 是否启用下载延迟
+    // Whether to enable download delay
     "enabled": true,
-    // 每次下载前的延迟时间（秒）
+    // Delay time before each download (seconds)
     "delay_seconds": 0.5
   },
 
-  // 下载超时配置（秒）
+  // Download timeout configuration (seconds)
   "download_timeout": {
-    // 连接超时（建立TCP连接的最长时间）
+    // Connection timeout (maximum time to establish a TCP connection)
     "connect": 10,
-    // 读取超时（等待服务器响应数据的最长时间）
+    // Read timeout (maximum time to wait for server response data)
     "sock_read": 20,
-    // 总超时（整个下载过程的最长时间，包括连接+传输）
+    // Total timeout (maximum time for the entire download process, including connection + transfer)
     "total": 30,
-    // 最大重试次数（下载失败后的重试次数）
+    // Maximum number of retries (number of retries after a download failure)
     "max_retries": 3
   },
 
-  // 性能监控配置
+  // Performance monitoring configuration
   "performance_monitoring": {
-    // 慢速下载阈值（秒）- 超过此时间的下载会被记录为警告
+    // Slow download threshold (seconds) - downloads exceeding this time will be logged as warnings
     "slow_threshold_seconds": 5
   },
 
-  // 连接池配置
+  // Connection pool configuration
   "connection_pool": {
-    // 总连接数
+    // Total connections
     "total_limit": 200,
-    // 每个主机的连接数
+    // Connections per host
     "per_host_limit": 50,
-    // 保活超时
+    // Keep-alive timeout
     "keepalive_timeout": 30,
-    // DNS缓存时间
+    // DNS cache time-to-live
     "dns_cache_ttl": 300
   },
 
-  // 内存管理配置
+  // Memory management configuration
   "memory_management": {
-    // 触发GC的内存阈值（MB）
+    // GC trigger memory threshold (MB)
     "gc_threshold_mb": 500,
-    // 图片缓存最大数量
+    // Maximum number of images in cache
     "image_cache_max_size": 500,
-    // 缓存有效期（秒）
+    // Cache validity period (seconds)
     "image_cache_ttl_seconds": 3600
   },
 
   // ============================================================
-  // 调试设置
+  // Debug Settings
   // ============================================================
 
-  // 是否在调试时显示完整URL
-  // 设置为 true 时，控制台日志中将显示完整的图片URL（不截断）
-  // 设置为 false 时，根据下面的 url_display_length 配置来截断显示
+  // Whether to display full URLs during debugging
+  // If set to true, full image URLs will be displayed in console logs (not truncated).
+  // If set to false, display will be truncated according to the url_display_length configuration below.
   "debug_show_full_urls": true,
 
-  // URL显示长度（当 debug_show_full_urls 为 false 时生效）
-  // 控制台日志中URL的最大显示长度，默认200个字符通常足够显示完整的URL
-  // 如果还是看不全，可以增大这个值，或者直接设置 debug_show_full_urls 为 true
+  // URL display length (effective when debug_show_full_urls is false)
+  // Maximum display length of URLs in console logs. The default 200 characters is usually sufficient to display the full URL.
+  // If it's still not fully visible, you can increase this value or directly set debug_show_full_urls to true.
   "url_display_length": 200,
 
   // ============================================================
-  // LMArena 思维链适配设置
+  // LMArena Chain of Thought Adaptation Settings
   // ============================================================
 
-  // 是否启用lmarena思维链转换
-  // 启用后，将解析lmarena返回的ag前缀思维链内容
+  // Whether to enable LMArena chain of thought conversion
+  // If enabled, it will parse the ag-prefixed chain of thought content returned by LMArena.
   "enable_lmarena_reasoning": false,
 
-  // 思维链输出模式
-  // "openai": 转换为OpenAI兼容的reasoning格式（类似o1模型）
-  // "think_tag": 用<think></think>标签包裹思维链内容
+  // Chain of thought output mode
+  // "openai": Convert to OpenAI compatible reasoning format (similar to o1 model)
+  // "think_tag": Wrap chain of thought content with <think></think> tags
   "reasoning_output_mode": "openai",
 
-  // 是否在流式传输中保持思维链的流式输出特性
-  // true: 思维链内容实时流式输出
-  // false: 等待完整思维链后一次性输出
+  // Whether to preserve the streaming output characteristic of the chain of thought during streaming transmission
+  // true: Chain of thought content streams out in real-time
+  // false: Waits for the complete chain of thought before outputting it all at once
   "preserve_streaming": true,
 
-  // 是否从历史消息中剥离思维链内容
-  // true: 当接收到包含思维链的历史消息时，自动剥离思维链部分，避免上下文冗余
-  // false: 保留历史消息中的思维链内容
-  // 注意：仅对think_tag模式有效，OpenAI模式的reasoning_content字段会被自动忽略
+  // Whether to strip chain of thought content from historical messages
+  // true: When receiving historical messages containing chain of thought, automatically strip the chain of thought part to avoid context redundancy.
+  // false: Retain chain of thought content in historical messages.
+  // Note: Only effective for think_tag mode, the reasoning_content field in OpenAI mode will be automatically ignored.
   "strip_reasoning_from_history": false,
 
   // ============================================================
-  // 自动重启设置
+  // Auto Restart Settings
   // ============================================================
 
-  // 是否启用空闲自动重启
-  // 当服务器在指定时间内（如下所设）没有收到任何 API 请求时，将自动重启
+  // Whether to enable idle auto-restart
+  // The server will automatically restart if it does not receive any API requests within the specified time (as set below).
   "enable_idle_restart": true,
 
-  // 空闲重启超时时间（秒）
-  // 服务器在"检查与更新完毕"后，若超过此时长未收到任何请求，则会重启
-  // 设置为 -1 可禁用此超时功能（即使上面开关为true）
+  // Idle restart timeout (seconds)
+  // After the server has "checked and updated", if no requests are received for longer than this duration, it will restart.
+  // Set to -1 to disable this timeout feature (even if the switch above is true).
   "idle_restart_timeout_seconds": -1,
 
   // ============================================================
-  // 安全设置
+  // Security Settings
   // ============================================================
 
-  // API Key（设置一个 API Key 来保护您的服务）
-  // 如果设置了此值，所有到 /v1/chat/completions 的请求都必须在 Authorization 头部中包含正确的 Bearer Token
+  // API Key (Set an API Key to protect your service)
+  // If this value is set, all requests to /v1/chat/completions must include the correct Bearer Token in the Authorization header.
   "api_key": ""
 }
