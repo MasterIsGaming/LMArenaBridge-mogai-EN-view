@@ -1,38 +1,39 @@
 """
-监控模块 - 用于收集和管理请求统计数据
+Monitoring Module - Used for collecting and managing request statistics
 """
 
 import json
 import time
 import threading
 from datetime import datetime, timedelta
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional, List
 import logging
 from pathlib import Path
+import sys
 
 logger = logging.getLogger(__name__)
 
-# 配置
+# Configuration
 class MonitorConfig:
-    """监控配置"""
+    """Monitoring Configuration"""
     LOG_DIR = Path("logs")
     REQUEST_LOG_FILE = "requests.jsonl"
     ERROR_LOG_FILE = "errors.jsonl"
-    STATS_FILE = "stats.json"  # 新增：统计数据文件
+    STATS_FILE = "stats.json"  # New: Statistics data file
     MAX_LOG_SIZE = 400 * 1024 * 1024  # 10MB
     MAX_LOG_FILES = 10
     MAX_RECENT_REQUESTS = 10000
     MAX_RECENT_ERRORS = 50
-    STATS_UPDATE_INTERVAL = 5  # 秒
+    STATS_UPDATE_INTERVAL = 5  # Seconds
 
-# 确保日志目录存在
+# Ensure the log directory exists
 MonitorConfig.LOG_DIR.mkdir(exist_ok=True)
 
 @dataclass
 class RequestInfo:
-    """请求信息"""
+    """Request Information"""
     request_id: str
     timestamp: float
     model: str
@@ -42,17 +43,17 @@ class RequestInfo:
     messages_count: int = 0
     session_id: Optional[str] = None
     mode: Optional[str] = None
-    # 新增详细信息字段
+    # New detailed information fields
     request_messages: Optional[List[dict]] = None
     request_params: Optional[dict] = None
     response_content: Optional[str] = None
-    reasoning_content: Optional[str] = None  # 新增：思维链内容
+    reasoning_content: Optional[str] = None  # New: Chain of thought content
     input_tokens: int = 0
     output_tokens: int = 0
 
 @dataclass
 class Stats:
-    """统计数据"""
+    """Statistics Data"""
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
@@ -62,64 +63,64 @@ class Stats:
     uptime: float = 0.0
 
 class LogManager:
-    """日志管理器"""
-    
+    """Log Manager"""
+
     def __init__(self):
         self.request_log_path = MonitorConfig.LOG_DIR / MonitorConfig.REQUEST_LOG_FILE
         self.error_log_path = MonitorConfig.LOG_DIR / MonitorConfig.ERROR_LOG_FILE
         self._lock = threading.Lock()
-        
+
     def write_request_log(self, log_entry: dict):
-        """写入请求日志"""
+        """Writes a request log entry"""
         with self._lock:
             try:
                 with open(self.request_log_path, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
             except Exception as e:
-                logger.error(f"写入请求日志失败: {e}")
-    
+                logger.error(f"Failed to write request log: {e}")
+
     def write_error_log(self, log_entry: dict):
-        """写入错误日志"""
+        """Writes an error log entry"""
         with self._lock:
             try:
                 with open(self.error_log_path, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
             except Exception as e:
-                logger.error(f"写入错误日志失败: {e}")
-    
+                logger.error(f"Failed to write error log: {e}")
+
     def read_recent_logs(self, log_type: str = "requests", limit: int = 50) -> List[dict]:
-        """读取最近的日志（仅返回完成的请求）"""
+        """Reads recent logs (returns only completed requests)"""
         log_path = self.request_log_path if log_type == "requests" else self.error_log_path
         logs = []
-        
+
         if not log_path.exists():
             return logs
-            
+
         try:
             with open(log_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-                # 从后往前读取，收集最近的 request_end 类型日志
+                # Read from back to front, collecting recent 'request_end' type logs
                 for line in reversed(lines):
                     if len(logs) >= limit:
                         break
                     try:
                         log_entry = json.loads(line.strip())
-                        # 只返回 request_end 类型的日志（包含完整信息）
+                        # Only return 'request_end' type logs (containing complete information)
                         if log_type == "requests" and log_entry.get('type') == 'request_end':
                             logs.append(log_entry)
                         elif log_type == "errors":
-                            # 错误日志不需要过滤
+                            # Error logs do not need filtering
                             logs.append(log_entry)
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
-            logger.error(f"读取日志失败: {e}")
-            
-        return logs  # 已经是倒序的（最新的在前）
+            logger.error(f"Failed to read logs: {e}")
+
+        return logs  # Already in reverse order (newest first)
 
 class MonitoringService:
-    """监控服务"""
-    
+    """Monitoring Service"""
+
     def __init__(self):
         self.startup_time = time.time()
         self.log_manager = LogManager()
@@ -131,28 +132,27 @@ class MonitoringService:
             'total_duration': 0, 'count_with_duration': 0
         })
         self._lock = threading.Lock()
-        
-        # 新增：存储完整的请求详情（用于详情查看）
-        # 使用OrderedDict实现更好的内存管理
-        from collections import OrderedDict
-        self.request_details_cache = OrderedDict()  # 使用OrderedDict管理缓存
-        self.MAX_DETAILS_CACHE = 10000  # 保持原有的缓存大小
-        self.cache_size_limit_mb = 500  # 增加缓存大小限制为500MB，确保数据完整性
-        
-        # WebSocket客户端管理
+
+        # New: Store complete request details (for detailed viewing)
+        # Use OrderedDict for better memory management
+        self.request_details_cache = OrderedDict()  # Use OrderedDict to manage the cache
+        self.MAX_DETAILS_CACHE = 10000  # Keep the original cache size
+        self.cache_size_limit_mb = 500  # Increase cache size limit to 500MB to ensure data integrity
+
+        # WebSocket client management
         self.monitor_clients = set()
-        
-        # 加载持久化的统计数据
+
+        # Load persisted statistics
         self._load_persisted_stats()
-        
-        logger.info("监控服务已初始化")
-    
+
+        logger.info("Monitoring service initialized")
+
     def request_start(self, request_id: str, model: str, messages_count: int = 0,
                      session_id: str = None, mode: str = None,
                      messages: List[dict] = None, params: dict = None):
-        """记录请求开始（增加详细信息）"""
+        """Records the start of a request (with detailed information)"""
         with self._lock:
-            # 计算输入token的估算值
+            # Estimate input tokens
             estimated_input_tokens = 0
             if messages:
                 for msg in messages:
@@ -161,11 +161,11 @@ class MonitoringService:
                         if isinstance(content, str):
                             estimated_input_tokens += len(content) // 4
                         elif isinstance(content, list):
-                            # 处理多模态消息
+                            # Handle multimodal messages
                             for part in content:
                                 if isinstance(part, dict) and part.get('type') == 'text':
                                     estimated_input_tokens += len(part.get('text', '')) // 4
-            
+
             request_info = RequestInfo(
                 request_id=request_id,
                 timestamp=time.time(),
@@ -176,14 +176,14 @@ class MonitoringService:
                 mode=mode,
                 request_messages=messages,
                 request_params=params,
-                input_tokens=estimated_input_tokens  # 设置估算的输入token
+                input_tokens=estimated_input_tokens  # Set estimated input tokens
             )
             self.active_requests[request_id] = request_info
-            
-            # 同时存储到详情缓存
+
+            # Also store in details cache
             self._store_request_details(request_id, request_info)
-            
-            # 写入日志
+
+            # Write to log
             log_entry = {
                 'type': 'request_start',
                 'timestamp': request_info.timestamp,
@@ -194,18 +194,18 @@ class MonitoringService:
                 'mode': mode
             }
             self.log_manager.write_request_log(log_entry)
-            
-            logger.info(f"请求开始 [ID: {request_id[:8]}] 模型: {model}")
-    
+
+            logger.info(f"Request started [ID: {request_id[:8]}] Model: {model}")
+
     def request_end(self, request_id: str, success: bool, error: str = None,
                     response_content: str = None, reasoning_content: str = None,
                     input_tokens: int = 0, output_tokens: int = 0):
-        """记录请求结束（增加响应内容和思维链）"""
+        """Records the end of a request (with response content and chain of thought)"""
         with self._lock:
             if request_id not in self.active_requests:
-                logger.warning(f"未找到请求 {request_id}")
+                logger.warning(f"Request {request_id} not found")
                 return
-                
+
             request_info = self.active_requests[request_id]
             request_info.status = 'success' if success else 'failed'
             request_info.duration = time.time() - request_info.timestamp
@@ -214,29 +214,29 @@ class MonitoringService:
             request_info.reasoning_content = reasoning_content
             request_info.input_tokens = input_tokens
             request_info.output_tokens = output_tokens
-            
-            # 更新详情缓存
+
+            # Update details cache
             self._store_request_details(request_id, request_info)
-            
-            # 更新模型统计
+
+            # Update model statistics
             model = request_info.model
             self.model_stats[model]['total'] += 1
             if success:
                 self.model_stats[model]['success'] += 1
             else:
                 self.model_stats[model]['failed'] += 1
-                
+
             if request_info.duration:
                 self.model_stats[model]['total_duration'] += request_info.duration
                 self.model_stats[model]['count_with_duration'] += 1
-            
-            # 持久化统计数据
+
+            # Persist statistics
             self._persist_stats()
-            
-            # 添加到最近请求列表
+
+            # Add to recent requests list
             self.recent_requests.append(asdict(request_info))
-            
-            # 如果失败，添加到错误列表
+
+            # If failed, add to error list
             if not success:
                 error_info = {
                     'timestamp': time.time(),
@@ -246,8 +246,8 @@ class MonitoringService:
                 }
                 self.recent_errors.append(error_info)
                 self.log_manager.write_error_log(error_info)
-            
-            # 写入请求日志（包含完整详情）
+
+            # Write request log (including full details)
             log_entry = {
                 'type': 'request_end',
                 'timestamp': time.time(),
@@ -261,64 +261,64 @@ class MonitoringService:
                 'messages_count': request_info.messages_count,
                 'input_tokens': request_info.input_tokens,
                 'output_tokens': request_info.output_tokens,
-                # 包含详细信息
+                # Include detailed information
                 'request_messages': request_info.request_messages,
                 'request_params': request_info.request_params,
                 'response_content': request_info.response_content,
                 'reasoning_content': request_info.reasoning_content
             }
             self.log_manager.write_request_log(log_entry)
-            
-            # 从活动请求中移除
+
+            # Remove from active requests
             del self.active_requests[request_id]
-            
-            logger.info(f"请求结束 [ID: {request_id[:8]}] 状态: {request_info.status} 耗时: {request_info.duration:.2f}s")
-    
+
+            logger.info(f"Request ended [ID: {request_id[:8]}] Status: {request_info.status} Duration: {request_info.duration:.2f}s")
+
     def get_stats(self) -> Stats:
-        """获取统计数据"""
+        """Retrieves statistics"""
         with self._lock:
             stats = Stats()
             stats.uptime = time.time() - self.startup_time
             stats.active_requests = len(self.active_requests)
-            
-            # 获取所有时间的统计（从持久化数据）
-            # 优先使用持久化的总数，这样即使重启服务器也能保持准确
+
+            # Get all-time statistics (from persisted data)
+            # Prioritize persisted totals to maintain accuracy even after server restarts
             total_all_time = sum(s['total'] for s in self.model_stats.values())
             success_all_time = sum(s['success'] for s in self.model_stats.values())
             failed_all_time = sum(s['failed'] for s in self.model_stats.values())
-            
-            # 使用所有时间的总数
+
+            # Use all-time totals
             stats.total_requests = total_all_time
             stats.successful_requests = success_all_time
             stats.failed_requests = failed_all_time
-            
-            # 计算总消息数（从最近的请求中累加）
+
+            # Calculate total messages (accumulated from recent requests)
             stats.total_messages = sum(req.get('messages_count', 0) for req in self.recent_requests)
-            
-            # 计算平均响应时间（使用最近100个请求）
+
+            # Calculate average response time (using the last 100 requests)
             recent_durations = []
-            for req in list(self.recent_requests)[-100:]:  # 最近100个请求
+            for req in list(self.recent_requests)[-100:]:  # Last 100 requests
                 if req.get('duration'):
                     recent_durations.append(req['duration'])
-            
+
             if recent_durations:
                 stats.avg_duration = sum(recent_durations) / len(recent_durations)
-                
+
             return stats
-    
+
     def get_model_stats(self) -> List[dict]:
-        """获取模型统计"""
+        """Retrieves model statistics"""
         with self._lock:
             model_stats_list = []
             for model, stats in self.model_stats.items():
                 avg_duration = 0
                 if stats['count_with_duration'] > 0:
                     avg_duration = stats['total_duration'] / stats['count_with_duration']
-                    
+
                 success_rate = 0
                 if stats['total'] > 0:
                     success_rate = (stats['success'] / stats['total']) * 100
-                    
+
                 model_stats_list.append({
                     'model': model,
                     'total_requests': stats['total'],
@@ -327,210 +327,209 @@ class MonitoringService:
                     'avg_duration': avg_duration,
                     'success_rate': success_rate
                 })
-            
-            # 按总请求数排序
+
+            # Sort by total requests
             model_stats_list.sort(key=lambda x: x['total_requests'], reverse=True)
             return model_stats_list
-    
+
     def get_active_requests(self) -> List[dict]:
-        """获取活动请求列表"""
+        """Retrieves a list of active requests"""
         with self._lock:
             return [asdict(req) for req in self.active_requests.values()]
-    
+
     def get_recent_requests(self, limit: int = 50) -> List[dict]:
-        """获取最近的请求"""
+        """Retrieves recent requests"""
         with self._lock:
             requests = list(self.recent_requests)
-            return requests[-limit:][::-1]  # 最新的在前
-    
+            return requests[-limit:][::-1]  # Newest first
+
     def get_recent_errors(self, limit: int = 30) -> List[dict]:
-        """获取最近的错误"""
+        """Retrieves recent errors"""
         with self._lock:
             errors = list(self.recent_errors)
-            return errors[-limit:][::-1]  # 最新的在前
-    
+            return errors[-limit:][::-1]  # Newest first
+
     def get_summary(self) -> dict:
-        """获取监控摘要"""
+        """Retrieves monitoring summary"""
         stats = self.get_stats()
         model_stats = self.get_model_stats()
-        
+
         return {
             'stats': asdict(stats),
             'model_stats': model_stats,
             'active_requests_list': self.get_active_requests(),
             'recent_errors_count': len(self.recent_errors)
         }
-    
+
     async def broadcast_to_monitors(self, data: dict):
-        """向所有监控客户端广播数据"""
+        """Broadcasts data to all monitoring clients"""
         if not self.monitor_clients:
             return
-            
+
         disconnected = []
         for client in self.monitor_clients:
             try:
                 await client.send_json(data)
             except:
                 disconnected.append(client)
-        
-        # 清理断开的连接
+
+        # Clean up disconnected connections
         for client in disconnected:
             self.monitor_clients.discard(client)
-    
+
     def add_monitor_client(self, websocket):
-        """添加监控客户端"""
+        """Adds a monitoring client"""
         self.monitor_clients.add(websocket)
-        logger.debug(f"监控客户端已连接，当前客户端数: {len(self.monitor_clients)}")
-    
+        logger.debug(f"Monitor client connected, current client count: {len(self.monitor_clients)}")
+
     def remove_monitor_client(self, websocket):
-        """移除监控客户端"""
+        """Removes a monitoring client"""
         self.monitor_clients.discard(websocket)
-        logger.debug(f"监控客户端已断开，当前客户端数: {len(self.monitor_clients)}")
-    
+        logger.debug(f"Monitor client disconnected, current client count: {len(self.monitor_clients)}")
+
     def _store_request_details(self, request_id: str, request_info: RequestInfo):
-        """存储请求详情到缓存（保持数据完整性）"""
-        import sys
-        
-        # 创建要存储的数据 - 保持完整性，不截断
+        """Stores request details to cache (maintaining data integrity)"""
+
+        # Create data to be stored - maintain integrity, do not truncate
         request_data = asdict(request_info)
-        
-        # 检查缓存大小（粗略估算）
+
+        # Check cache size (rough estimate)
         cache_size_bytes = sys.getsizeof(self.request_details_cache)
         cache_size_mb = cache_size_bytes / (1024 * 1024)
-        
-        # 如果缓存过大（超过500MB），删除最老的10%项目
+
+        # If cache is too large (exceeds 500MB), delete the oldest 10% of items
         if cache_size_mb > self.cache_size_limit_mb and len(self.request_details_cache) > 0:
-            # 删除最老的10%项目
+            # Delete the oldest 10% of items
             items_to_remove = max(1, len(self.request_details_cache) // 10)
             for _ in range(items_to_remove):
                 self.request_details_cache.popitem(last=False)
             cache_size_bytes = sys.getsizeof(self.request_details_cache)
             cache_size_mb = cache_size_bytes / (1024 * 1024)
-            logger.info(f"[CACHE] 缓存超过限制，已清理 {items_to_remove} 个旧项，当前大小: ~{cache_size_mb:.2f}MB")
-        
-        # 限制缓存项数
+            logger.info(f"[CACHE] Cache exceeded limit, {items_to_remove} old items cleaned, current size: ~{cache_size_mb:.2f}MB")
+
+        # Limit the number of cache items
         if len(self.request_details_cache) >= self.MAX_DETAILS_CACHE:
-            # 删除最老的缓存项（FIFO）
+            # Delete the oldest cache item (FIFO)
             self.request_details_cache.popitem(last=False)
-        
-        # 存储新项 - 保持数据完整
+
+        # Store new item - maintain data integrity
         self.request_details_cache[request_id] = request_data
-        
-        # 定期记录缓存状态（每500个请求）
+
+        # Periodically log cache status (every 500 requests)
         if len(self.request_details_cache) % 500 == 0:
-            logger.debug(f"[CACHE] 详情缓存状态 - 项数: {len(self.request_details_cache)}, 大小: ~{cache_size_mb:.2f}MB")
-    
+            logger.debug(f"[CACHE] Details cache status - Items: {len(self.request_details_cache)}, Size: ~{cache_size_mb:.2f}MB")
+
     def get_request_details(self, request_id: str) -> Optional[dict]:
-        """获取请求详情"""
+        """Retrieves request details"""
         with self._lock:
-            # 先从缓存中查找
+            # First, look in the cache
             if request_id in self.request_details_cache:
                 return self.request_details_cache[request_id]
-            
-            # 从活跃请求中查找
+
+            # Look in active requests
             if request_id in self.active_requests:
                 return asdict(self.active_requests[request_id])
-            
-            # 从最近请求中查找
+
+            # Look in recent requests
             for req in self.recent_requests:
                 if req.get('request_id') == request_id:
                     return req
-            
-            # 如果内存中都没有，从日志文件中查找
+
+            # If not found in memory, look in log files
             return self._find_request_in_logs(request_id)
-    
+
     def _find_request_in_logs(self, request_id: str) -> Optional[dict]:
-        """从日志文件中查找请求详情"""
+        """Finds request details in log files"""
         try:
             if not self.log_manager.request_log_path.exists():
                 return None
-            
+
             with open(self.log_manager.request_log_path, 'r', encoding='utf-8') as f:
-                # 从后往前读取，提高查找效率
+                # Read from back to front to improve search efficiency
                 lines = f.readlines()
                 for line in reversed(lines):
                     try:
                         log_entry = json.loads(line.strip())
                         if (log_entry.get('request_id') == request_id and
                             log_entry.get('type') == 'request_end'):
-                            # 找到了完整的请求记录
+                            # Found complete request record
                             return log_entry
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
-            logger.error(f"从日志文件查找请求详情失败: {e}")
-        
+            logger.error(f"Failed to find request details in log file: {e}")
+
         return None
-    
+
     def _persist_stats(self):
-        """持久化统计数据到文件"""
+        """Persists statistics data to a file"""
         try:
             stats_path = MonitorConfig.LOG_DIR / MonitorConfig.STATS_FILE
-            
-            # 准备要保存的数据
+
+            # Prepare data to be saved
             stats_data = {
                 'last_update': time.time(),
                 'startup_time': self.startup_time,
                 'model_stats': dict(self.model_stats),
-                # 保存总体统计
+                # Save overall statistics
                 'total_requests_all_time': sum(s['total'] for s in self.model_stats.values()),
                 'total_success_all_time': sum(s['success'] for s in self.model_stats.values()),
                 'total_failed_all_time': sum(s['failed'] for s in self.model_stats.values())
             }
-            
-            # 写入文件
+
+            # Write to file
             with open(stats_path, 'w', encoding='utf-8') as f:
                 json.dump(stats_data, f, ensure_ascii=False, indent=2)
-                
+
         except Exception as e:
-            logger.error(f"持久化统计数据失败: {e}")
-    
+            logger.error(f"Failed to persist statistics data: {e}")
+
     def _load_persisted_stats(self):
-        """从文件加载持久化的统计数据"""
+        """Loads persisted statistics data from a file"""
         try:
             stats_path = MonitorConfig.LOG_DIR / MonitorConfig.STATS_FILE
-            
+
             if not stats_path.exists():
-                logger.info("未找到持久化统计数据，将从零开始")
+                logger.info("No persisted statistics data found, starting from scratch")
                 return
-            
+
             with open(stats_path, 'r', encoding='utf-8') as f:
                 stats_data = json.load(f)
-            
-            # 恢复模型统计
+
+            # Restore model statistics
             if 'model_stats' in stats_data:
                 self.model_stats = defaultdict(
                     lambda: {'total': 0, 'success': 0, 'failed': 0,
                             'total_duration': 0, 'count_with_duration': 0},
                     stats_data['model_stats']
                 )
-            
-            # 恢复最近的请求和错误
+
+            # Restore recent requests and errors
             if 'recent_requests' in stats_data:
                 for req in stats_data['recent_requests']:
                     self.recent_requests.append(req)
-            
+
             if 'recent_errors' in stats_data:
                 for err in stats_data['recent_errors']:
                     self.recent_errors.append(err)
-            
-            # 如果是同一次运行会话，保持原有的启动时间
-            # 否则重置启动时间
+
+            # If it's the same running session, keep the original startup time
+            # Otherwise, reset the startup time
             if 'startup_time' in stats_data:
                 time_since_last_update = time.time() - stats_data.get('last_update', 0)
-                # 如果距离上次更新超过1小时，认为是新的会话
+                # If more than 1 hour has passed since the last update, consider it a new session
                 if time_since_last_update > 3600:
                     self.startup_time = time.time()
                 else:
                     self.startup_time = stats_data['startup_time']
-            
-            logger.info(f"已加载持久化统计数据：{len(self.model_stats)} 个模型统计")
-            
+
+            logger.info(f"Persisted statistics data loaded: {len(self.model_stats)} model statistics")
+
         except Exception as e:
-            logger.error(f"加载持久化统计数据失败: {e}")
-    
+            logger.error(f"Failed to load persisted statistics data: {e}")
+
     def get_all_time_stats(self) -> dict:
-        """获取所有时间的统计数据（从日志文件计算）"""
+        """Retrieves all-time statistics (calculated from log files)"""
         try:
             if not self.log_manager.request_log_path.exists():
                 return {
@@ -539,12 +538,12 @@ class MonitoringService:
                     'total_failed': 0,
                     'models': {}
                 }
-            
+
             model_counts = defaultdict(lambda: {'total': 0, 'success': 0, 'failed': 0})
             total_requests = 0
             total_success = 0
             total_failed = 0
-            
+
             with open(self.log_manager.request_log_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     try:
@@ -552,29 +551,29 @@ class MonitoringService:
                         if log_entry.get('type') == 'request_end':
                             model = log_entry.get('model', 'unknown')
                             status = log_entry.get('status', 'failed')
-                            
+
                             total_requests += 1
                             model_counts[model]['total'] += 1
-                            
+
                             if status == 'success':
                                 total_success += 1
                                 model_counts[model]['success'] += 1
                             else:
                                 total_failed += 1
                                 model_counts[model]['failed'] += 1
-                                
+
                     except json.JSONDecodeError:
                         continue
-            
+
             return {
                 'total_requests': total_requests,
                 'total_success': total_success,
                 'total_failed': total_failed,
                 'models': dict(model_counts)
             }
-            
+
         except Exception as e:
-            logger.error(f"计算所有时间统计失败: {e}")
+            logger.error(f"Failed to calculate all-time statistics: {e}")
             return {
                 'total_requests': 0,
                 'total_success': 0,
@@ -582,5 +581,5 @@ class MonitoringService:
                 'models': {}
             }
 
-# 创建全局监控服务实例
+# Create a global monitoring service instance
 monitoring_service = MonitoringService()
