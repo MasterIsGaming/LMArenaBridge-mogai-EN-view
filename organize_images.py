@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # organize_images.py
-# 整理 downloaded_images 文件夹中的图片，按日期归类
+# Organizes images in the downloaded_images folder by date
 
 import os
 import shutil
@@ -9,11 +9,11 @@ from datetime import datetime
 import re
 import sys
 
-# 配置
+# Configuration
 IMAGE_SAVE_DIR = Path("./downloaded_images")
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
 
-# 统计信息
+# Statistics
 stats = {
     'total_files': 0,
     'organized_files': 0,
@@ -24,45 +24,45 @@ stats = {
 
 def extract_date_from_filename(filename):
     """
-    从文件名中提取日期
-    支持的格式：
-    - YYYYMMDD_HHMMSS_mmm_xxxxxxxx.ext (当前格式)
+    Extracts the date from the filename.
+    Supported formats:
+    - YYYYMMDD_HHMMSS_mmm_xxxxxxxx.ext (current format)
     - YYYYMMDD_*.ext
     """
-    # 尝试匹配 YYYYMMDD 格式的日期
+    # Attempt to match YYYYMMDD date format
     date_pattern = r'(\d{8})_'
     match = re.match(date_pattern, filename)
-    
+
     if match:
         date_str = match.group(1)
-        # 验证日期格式
+        # Validate date format
         try:
             datetime.strptime(date_str, '%Y%m%d')
             return date_str
         except ValueError:
             return None
-    
+
     return None
 
 def extract_date_from_mtime(filepath):
     """
-    从文件修改时间提取日期
+    Extracts the date from the file's modification time.
     """
     try:
         mtime = os.path.getmtime(filepath)
         date_obj = datetime.fromtimestamp(mtime)
         return date_obj.strftime('%Y%m%d')
     except Exception as e:
-        print(f"  ⚠️  无法获取文件修改时间: {e}")
+        print(f"  ⚠️  Could not get file modification time: {e}")
         return None
 
 def is_valid_date_folder(folder_name):
     """
-    检查是否是有效的日期文件夹（8位数字，YYYYMMDD格式）
+    Checks if it's a valid date folder (8 digits, YYYYMMDD format).
     """
     if not folder_name.isdigit() or len(folder_name) != 8:
         return False
-    
+
     try:
         datetime.strptime(folder_name, '%Y%m%d')
         return True
@@ -71,119 +71,119 @@ def is_valid_date_folder(folder_name):
 
 def organize_images(dry_run=True, verbose=False):
     """
-    整理图片文件
-    
+    Organizes image files.
+
     Args:
-        dry_run: 如果为True，只显示将要执行的操作，不实际移动文件
-        verbose: 详细输出模式
+        dry_run: If True, only shows the operations to be performed, does not actually move files.
+        verbose: Verbose output mode.
     """
     global stats
-    
+
     print("="*60)
-    print("📁 图片整理工具")
+    print("📁 Image Organization Tool")
     print("="*60)
-    
+
     if not IMAGE_SAVE_DIR.exists():
-        print(f"❌ 错误: 目录 '{IMAGE_SAVE_DIR}' 不存在")
+        print(f"❌ Error: Directory '{IMAGE_SAVE_DIR}' does not exist")
         return
-    
-    print(f"📂 扫描目录: {IMAGE_SAVE_DIR.absolute()}")
-    print(f"🔍 模式: {'预览模式（不会实际移动文件）' if dry_run else '执行模式（将实际移动文件）'}")
+
+    print(f"📂 Scanning directory: {IMAGE_SAVE_DIR.absolute()}")
+    print(f"🔍 Mode: {'Preview mode (no files will be moved)' if dry_run else 'Execution mode (files will be moved)'}")
     print()
-    
-    # 收集需要整理的文件
+
+    # Collect files to be organized
     files_to_organize = []
-    
-    # 遍历主目录中的文件
+
+    # Iterate through files in the main directory
     for item in IMAGE_SAVE_DIR.iterdir():
         if item.is_file():
             stats['total_files'] += 1
-            
-            # 检查是否是图片文件
+
+            # Check if it's an image file
             if item.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 if verbose:
-                    print(f"  ⏭️  跳过非图片文件: {item.name}")
+                    print(f"  ⏭️  Skipping non-image file: {item.name}")
                 stats['invalid_files'] += 1
                 continue
-            
-            # 提取日期
+
+            # Extract date
             date_str = extract_date_from_filename(item.name)
-            
-            # 如果文件名中没有日期，使用修改时间
+
+            # If no date in filename, use modification time
             if not date_str:
                 if verbose:
-                    print(f"  ℹ️  文件名无日期信息，使用修改时间: {item.name}")
+                    print(f"  ℹ️  No date info in filename, using modification time: {item.name}")
                 date_str = extract_date_from_mtime(item)
-            
+
             if date_str:
                 files_to_organize.append((item, date_str))
             else:
-                print(f"  ⚠️  无法确定日期，跳过: {item.name}")
+                print(f"  ⚠️  Could not determine date, skipping: {item.name}")
                 stats['invalid_files'] += 1
-        
+
         elif item.is_dir():
-            # 检查现有的日期文件夹
+            # Check existing date folders
             if is_valid_date_folder(item.name):
                 folder_files = list(item.glob('*'))
                 image_files = [f for f in folder_files if f.suffix.lower() in SUPPORTED_EXTENSIONS]
                 stats['already_organized'] += len(image_files)
                 if verbose:
-                    print(f"  ✅ 已组织的文件夹: {item.name} ({len(image_files)} 个文件)")
+                    print(f"  ✅ Already organized folder: {item.name} ({len(image_files)} files)")
             elif verbose:
-                print(f"  ℹ️  非日期文件夹: {item.name}")
-    
-    # 显示统计信息
+                print(f"  ℹ️  Non-date folder: {item.name}")
+
+    # Display statistics
     print()
-    print("📊 扫描统计:")
-    print(f"  - 主目录中的文件总数: {stats['total_files']}")
-    print(f"  - 需要整理的文件: {len(files_to_organize)}")
-    print(f"  - 已在日期文件夹中的文件: {stats['already_organized']}")
-    print(f"  - 跳过的文件: {stats['invalid_files']}")
+    print("📊 Scan Statistics:")
+    print(f"  - Total files in main directory: {stats['total_files']}")
+    print(f"  - Files to be organized: {len(files_to_organize)}")
+    print(f"  - Files already in date folders: {stats['already_organized']}")
+    print(f"  - Skipped files: {stats['invalid_files']}")
     print()
-    
+
     if not files_to_organize:
-        print("✅ 没有需要整理的文件")
+        print("✅ No files to organize")
         return
-    
-    # 按日期分组
+
+    # Group by date
     date_groups = {}
     for filepath, date_str in files_to_organize:
         if date_str not in date_groups:
             date_groups[date_str] = []
         date_groups[date_str].append(filepath)
-    
-    print(f"📅 将文件分组到 {len(date_groups)} 个日期文件夹:")
+
+    print(f"📅 Grouping files into {len(date_groups)} date folders:")
     for date_str in sorted(date_groups.keys()):
-        print(f"  - {date_str}: {len(date_groups[date_str])} 个文件")
+        print(f"  - {date_str}: {len(date_groups[date_str])} files")
     print()
-    
-    # 执行整理
+
+    # Perform organization
     if dry_run:
-        print("🔍 预览将要执行的操作:")
+        print("🔍 Preview of operations to be performed:")
         print()
     else:
-        print("🚀 开始整理文件:")
+        print("🚀 Starting file organization:")
         print()
-    
+
     for date_str, files in sorted(date_groups.items()):
-        # 创建日期文件夹
+        # Create date folder
         date_folder = IMAGE_SAVE_DIR / date_str
-        
+
         if dry_run:
-            print(f"📁 [{date_str}] 将创建/使用文件夹: {date_folder}")
+            print(f"📁 [{date_str}] Will create/use folder: {date_folder}")
         else:
             date_folder.mkdir(exist_ok=True)
-            print(f"📁 [{date_str}] 文件夹已准备: {date_folder}")
-        
-        # 移动文件
+            print(f"📁 [{date_str}] Folder prepared: {date_folder}")
+
+        # Move files
         for filepath in files:
             target_path = date_folder / filepath.name
-            
-            # 检查目标文件是否已存在
+
+            # Check if target file already exists
             if target_path.exists():
-                print(f"  ⚠️  文件已存在，跳过: {filepath.name}")
+                print(f"  ⚠️  File already exists, skipping: {filepath.name}")
                 continue
-            
+
             if dry_run:
                 print(f"  ➡️  {filepath.name} -> {date_str}/{filepath.name}")
             else:
@@ -192,66 +192,66 @@ def organize_images(dry_run=True, verbose=False):
                     print(f"  ✅ {filepath.name} -> {date_str}/{filepath.name}")
                     stats['organized_files'] += 1
                 except Exception as e:
-                    print(f"  ❌ 移动失败: {filepath.name} - {e}")
+                    print(f"  ❌ Failed to move: {filepath.name} - {e}")
                     stats['errors'] += 1
-        
+
         print()
-    
-    # 最终统计
+
+    # Final statistics
     print("="*60)
-    print("📈 整理完成!")
+    print("📈 Organization complete!")
     print("="*60)
-    
+
     if not dry_run:
-        print(f"  ✅ 成功整理: {stats['organized_files']} 个文件")
-        print(f"  ⚠️  发生错误: {stats['errors']} 个文件")
+        print(f"  ✅ Successfully organized: {stats['organized_files']} files")
+        print(f"  ⚠️  Errors occurred: {stats['errors']} files")
     else:
-        print(f"  📋 预计整理: {len(files_to_organize)} 个文件")
+        print(f"  📋 Estimated to organize: {len(files_to_organize)} files")
         print()
-        print("💡 提示: 使用 --execute 参数执行实际整理")
-    
+        print("💡 Tip: Use --execute parameter to perform actual organization")
+
     print("="*60)
 
 def main():
     """
-    主函数
+    Main function.
     """
     import argparse
-    
+
     parser = argparse.ArgumentParser(
-        description='整理 downloaded_images 文件夹中的图片，按日期归类',
+        description='Organizes images in the downloaded_images folder by date',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例:
-  python organize_images.py                  # 预览模式（不实际移动文件）
-  python organize_images.py --execute        # 执行整理
-  python organize_images.py --execute -v     # 执行整理（详细输出）
+Examples:
+  python organize_images.py                  # Preview mode (does not actually move files)
+  python organize_images.py --execute        # Execute organization
+  python organize_images.py --execute -v     # Execute organization (verbose output)
         """
     )
-    
+
     parser.add_argument(
         '--execute',
         action='store_true',
-        help='实际执行整理（默认为预览模式）'
+        help='Actually performs organization (defaults to preview mode)'
     )
-    
+
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='详细输出模式'
+        help='Verbose output mode'
     )
-    
+
     args = parser.parse_args()
-    
-    # 确认执行
+
+    # Confirm execution
     if args.execute:
         print()
-        response = input("⚠️  确认要执行整理操作吗？这将移动文件到日期文件夹。(y/N): ")
+        response = input("⚠️  Are you sure you want to perform the organization operation? This will move files to date folders. (y/N): ")
         if response.lower() != 'y':
-            print("❌ 操作已取消")
+            print("❌ Operation cancelled")
             return
         print()
-    
+
     organize_images(dry_run=not args.execute, verbose=args.verbose)
 
 if __name__ == "__main__":
