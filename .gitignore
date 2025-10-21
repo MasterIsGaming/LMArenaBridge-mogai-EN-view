@@ -1,10 +1,10 @@
 /test
 /Debug
 test_openai_request.py
-原始openai格式.txt
-/另
+Original OpenAI Format.txt
+/Additionally
 stress_test.py
 /modules/__pycache__
 test_multi_file_upload.py
-/webdev反代
+/webdev Reverse proxy
 test_multimodal_request.py
