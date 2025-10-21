@@ -6,3 +6,6 @@ aiohttp
 httpx
 Pillow
 psutil
+pydantic
+python-multipart
+apscheduler
